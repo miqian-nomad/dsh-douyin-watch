@@ -164,6 +164,7 @@ window.__ModuleLoader__.load({
       const [note, setNote] = useState('');
       const [status, setStatus] = useState(null);
       const [cleaning, setCleaning] = useState(false);
+      const [injecting, setInjecting] = useState(false);
 
       const load = () => fetch('/api/douyin-watch/config')
         .then((r) => r.json())
@@ -319,6 +320,46 @@ window.__ModuleLoader__.load({
               placeholder: 'D:\\path\\to\\dir',
               style: Object.assign({}, ctlBase, { width: 240 }),
             }),
+          ),
+        ),
+        h(Card, { title: '人设' },
+          h(Row, { label: '一行短人设', hint: '跟着每次唤醒走，建议 ≤60 字（每轮都带，别写长）' },
+            h('input', {
+              value: cfg.personaShort || '',
+              onChange: (e) => save({ personaShort: e.target.value }),
+              placeholder: '例如：说话简短、带点调侃，别用敬语',
+              style: Object.assign({}, ctlBase, { width: 320 }),
+            }),
+          ),
+          h('div', { style: { padding: '10px 0 6px' } },
+            h('div', { style: { fontSize: 13, color: C.text } }, '完整人设（建议 ≤300 字）'),
+            h('div', { style: { fontSize: 12, color: C.text3, marginTop: 2 } }, '不会每轮发；点下面按钮才注入当前会话，之后靠会话记忆生效'),
+            h('textarea', {
+              defaultValue: cfg.personaFull || '',
+              key: 'personaFull',
+              onBlur: (e) => save({ personaFull: e.target.value }),
+              rows: 4,
+              placeholder: '性格、口头禅、回答习惯、禁忌……',
+              style: Object.assign({}, ctlBase, { width: '100%', height: 'auto', padding: 8, marginTop: 8, fontSize: 12, lineHeight: '18px', boxSizing: 'border-box' }),
+            }),
+            h('div', { style: { marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' } },
+              h('button', {
+                type: 'button',
+                onClick: () => {
+                  if (injecting) return
+                  setInjecting(true)
+                  setNote('正在注入人设…')
+                  fetch('/api/douyin-watch/persona/inject', { method: 'POST' })
+                    .then((r) => r.json())
+                    .then((d) => setNote(d.ok ? ('人设已注入（' + d.via + '，' + d.chars + ' 字）') : ('注入失败：' + (d.error || '未知'))))
+                    .catch(() => setNote('注入失败：接口没返回'))
+                    .then(() => setInjecting(false))
+                },
+                disabled: injecting,
+                style: Object.assign({}, ctlBase, { width: 'auto', padding: '0 12px', cursor: injecting ? 'default' : 'pointer', color: C.text2 }),
+              }, injecting ? '注入中…' : '注入到当前会话'),
+              h('span', { style: { fontSize: 12, color: C.text3 } }, '已填 ' + (cfg.personaFull || '').length + ' 字'),
+            ),
           ),
         ),
         h(Card, { title: '维护' },

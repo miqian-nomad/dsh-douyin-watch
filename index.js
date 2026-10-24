@@ -112,6 +112,12 @@ const DEFAULTS = {
   //                        —— 主人不在电脑前也能看到完整结论，不会出现"抖音一句话、DSH 一大篇"
   //   brief             ＝ DSH 写详细、私信只发简版（老行为）
   replyMode: 'conclusion',
+  // 人设（省上下文设计，2026-10-24）：
+  //   personaShort = 一行短人设，跟唤醒提示一起走（固定几十字，成本可控）
+  //   personaFull  = 完整人设（建议 ≤300 字），**只在设置页点「注入」时**进会话历史一次，
+  //                  之后靠会话记忆，不在每轮重复 —— 这才是省 token 的关键
+  personaShort: '',
+  personaFull: '',
   // ── 自动刷视频（每项都有独立开关）──
   autoScrollEnabled: false, // 总开关：关掉就完全不跑
   autoScrollWindows: ['12:00-14:00', '18:00-09:00'], // 自动跑的时间段，可增删
@@ -319,7 +325,7 @@ export function apply(ctx, config) {
   const toolDisposers = [] // 每个工具注册返回的卸载函数；插件卸载时一起清掉，避免热重载撞「already registered」
 
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
-  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
+  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaShort', 'personaFull', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -397,6 +403,33 @@ export function apply(ctx, config) {
         }
         if (req.method === 'GET' && pathname === '/api/douyin-watch/config') {
           return sendJson(200, { ok: true, config: await view() })
+        }
+        // POST /api/douyin-watch/persona/inject —— 把完整人设注入「当前盯着的会话」一次。
+        //   为什么做成手动按钮：人设全文进了会话历史后，**每轮请求都会带着它**。
+        //   只在需要时注入一次（或换人设时再点一次），比每轮拼进 prompt 省得多。
+        if (req.method === 'POST' && pathname === '/api/douyin-watch/persona/inject') {
+          const text = String(cfg.personaFull || '').trim()
+          if (!text) return sendJson(400, { ok: false, error: 'personaFull 是空的（先在设置页填完整人设）' })
+          if (text.length > 2000) return sendJson(400, { ok: false, error: `人设太长（${text.length} 字），建议 ≤300 字` })
+          const agent = [...watched.keys()][0]
+          if (!agent) return sendJson(409, { ok: false, error: '现在没有盯着的会话（先打开插件总开关 / 绑定一个会话）' })
+          const msg = makeUserMessage('【以下是收到这人设后一直生效的风格要求，别复述、别回显】\n' + text)
+          try {
+            if (typeof agent.inject === 'function') {
+              agent.inject(msg)
+              log(`人设已注入（inject，不唤醒，${text.length} 字）`)
+              return sendJson(200, { ok: true, via: 'inject', chars: text.length })
+            }
+            // 老版本 DSH 没有 inject：退化成 followup（会多跑一轮，但人设确实记住了）
+            if (typeof agent.followup === 'function') {
+              agent.followup(msg)
+              log(`人设已注入（followup，会多一轮，${text.length} 字）`)
+              return sendJson(200, { ok: true, via: 'followup', chars: text.length })
+            }
+            return sendJson(500, { ok: false, error: '这个 agent 既没有 inject 也没有 followup' })
+          } catch (e) {
+            return sendJson(500, { ok: false, error: String((e && e.message) || e) })
+          }
         }
         // POST /api/douyin-watch/cleanup —— 清浏览器缓存（脚本里是白名单，绝不动 Cookies / Local Storage）
         if (req.method === 'POST' && pathname === '/api/douyin-watch/cleanup') {
@@ -1472,8 +1505,12 @@ export function apply(ctx, config) {
             : '你的**结论直接写进 douyin_send 的 text**（完整、可读、口语化，别用 markdown 表格/代码块）——'
               + '主人手机上只能看到这条、看不到 DSH，所以别写两份、也别只发一句「在」。'
               + '发完后在 DSH 正文里只留一句「已回：<一句话摘要>」。'
+          // 短人设：一行，跟着唤醒提示走（固定几十字）；完整人设靠「注入一次」，不在这里拼
+          const personaShort = String(cfg.personaShort || '').trim()
+          const personaLine = personaShort ? `人设：${personaShort}\n` : ''
           const prompt =
             `抖音有 ${theirs.length} 条新私信（来自「${cfg.peer}」）：\n${body}${more}\n\n` +
+            personaLine +
             senderLine +
             replyModeLine +
             `\n🔴 红线：私密内容只能走 douyin_send（私信）；douyin_comment_at 是公开评论区，绝不把私聊内容放进去。主人让你去评论区时，先私信回一句「好，马上去看」，再去评论区回——两处都要回。`
