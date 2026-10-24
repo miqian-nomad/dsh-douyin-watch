@@ -22,6 +22,12 @@ const argv = process.argv.slice(2)
 const argOf = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? (argv[i + 1] ?? d) : d }
 const DRY = argv.includes('--dry')
 const INBOX_DAYS = Math.max(0, Number(argOf('--inbox-days', '7')) || 0)
+// 视频分析产物（联系表 + 文案）：默认放在 $HOME/analyses/<视频id>/
+// --analyses-days 0 = 全清（按钮用）；不传 = 14 天（自动清理用）
+const ANALYSES_DIR = String(argOf('--analyses-dir', '')).trim()
+const ANALYSES_DAYS = Number(argOf('--analyses-days', '14'))
+const SKIP_BROWSER = argv.includes('--skip-browser')
+const SKIP_INBOX = argv.includes('--skip-inbox')
 const HOME = (() => { try { return join(profileDir(), '..') } catch { return '' } })()
 
 // ⚠️ 只删这些（相对 profile 根）。它们都能重建，且不含登录态。
@@ -66,7 +72,7 @@ const prof = profileDir()
 const before = PROTECTED.map((rel) => ({ rel, exists: existsSync(join(prof, rel)) }))
 
 // 1) 先关浏览器（复用连接里的 Browser.close）。--dry 时不关，避免"只是试算却把浏览器弄停"
-if (!DRY) {
+if (!DRY && !SKIP_BROWSER) {
   let port = 0
   try {
     const c = await openPage({ url: 'about:blank' })
@@ -102,7 +108,7 @@ for (const rel of CACHE_DIRS) {
 }
 
 // 3) 收件箱里 N 天前的图（我们自己落的聊天图片）
-if (INBOX_DAYS > 0 && HOME) {
+if (!SKIP_INBOX && INBOX_DAYS > 0 && HOME) {
   const inbox = join(HOME, 'inbox')
   try {
     if (existsSync(inbox)) {
@@ -125,6 +131,33 @@ if (INBOX_DAYS > 0 && HOME) {
     }
   } catch (e) {
     result.errors.push('inbox: ' + ((e && e.message) || e))
+  }
+}
+
+// 3.2) 视频分析产物（联系表 + 文案）：--analyses-days 0 = 全清；>0 = 只清更老的
+if (ANALYSES_DIR) {
+  try {
+    if (existsSync(ANALYSES_DIR)) {
+      const cutoff = Number.isFinite(ANALYSES_DAYS) && ANALYSES_DAYS > 0 ? Date.now() - ANALYSES_DAYS * 86400000 : Infinity
+      let n = 0
+      let bytes = 0
+      for (const e of readdirSync(ANALYSES_DIR, { withFileTypes: true })) {
+        const full = join(ANALYSES_DIR, e.name)
+        try {
+          const st = statSync(full)
+          const at = st.mtimeMs
+          if (at >= cutoff) continue
+          const size = e.isDirectory() ? dirSize(full) : st.size
+          if (!DRY) rmSync(full, { recursive: true, force: true, maxRetries: 2 })
+          n++
+          bytes += size
+        } catch { /* 单项跳过 */ }
+      }
+      result.freedMB += bytes / 1048576
+      result.removed.push(`分析产物 ${n} 份（${ANALYSES_DAYS > 0 ? ANALYSES_DAYS + ' 天前的' : '全部'}，${(bytes / 1048576).toFixed(1)} MB）`)
+    }
+  } catch (e) {
+    result.errors.push('analyses: ' + ((e && e.message) || e))
   }
 }
 

@@ -436,7 +436,7 @@ export function apply(ctx, config) {
           pauseWatcher()
           let r
           try {
-            r = await runNode(join(HERE, 'tools', 'clean-cache.mjs'), ['--inbox-days', '7'], 240000)
+            r = await runNode(join(HERE, 'tools', 'clean-cache.mjs'), ['--inbox-days', '7', '--analyses-dir', join(cfg.home || HOME, 'analyses'), '--analyses-days', '0'], 240000)
           } finally {
             resumeWatcher()
           }
@@ -709,6 +709,26 @@ export function apply(ctx, config) {
   //   两个哨兵同时读同一个 9334 页面 → 抢页面（页面内 fetch 会被抽掉执行上下文）、
   //   重复唤醒、工具 already registered。谁先拿锁谁盯，另一个只保留设置接口。
   const lockFile = join(cfg.home || HOME, 'watcher.lock')
+  // 视频分析产物（联系表/文案）的集中目录 + 每日清理的记账文件
+  const analysesDir = join(cfg.home || HOME, 'analyses')
+  const purgeStateFile = join(cfg.home || HOME, 'analyses-purge.json')
+  let purgeCheckedAt = 0
+  function maybePurgeAnalyses() {
+    const now = Date.now()
+    if (now - purgeCheckedAt < 3600000) return // 每小时最多检查一次，别每轮都读盘
+    purgeCheckedAt = now
+    try {
+      const j = JSON.parse(readFileSync(purgeStateFile, 'utf8'))
+      if (j && now - Number(j.at || 0) < 86400000) return // 24 小时内已经清过
+    } catch { /* 没有记账文件就清一次 */ }
+    runNode(join(HERE, 'tools', 'clean-cache.mjs'), ['--skip-browser', '--skip-inbox', '--analyses-dir', analysesDir, '--analyses-days', '14'], 120000)
+      .then((r) => {
+        const p = r.parsed || {}
+        try { writeFileSync(purgeStateFile, JSON.stringify({ at: now })) } catch { /* ignore */ }
+        if (p.ok && (p.removed || []).length) log('自动清理分析产物：' + (p.removed || []).join('; '))
+      })
+      .catch(() => { /* 清不掉不影响主流程 */ })
+  }
   let lockHeld = false
   let lockNoteAt = 0
   const lockPid = () => { try { return Number(JSON.parse(readFileSync(lockFile, 'utf8')).pid) || 0 } catch { return 0 } }
@@ -1423,6 +1443,7 @@ export function apply(ctx, config) {
         if (!cfg.enabled) return // 设置里关掉 → 立刻静默（真正的停靠 stopAll，这行是兜底）
         touchLock() // 心跳：证明锁还有人用，别的实例不会抢
         if (syncFromFile()) return // 配置文件被改过（可能是另一个实例的设置页）→ 本轮重绑，不读消息
+        maybePurgeAnalyses() // 每天一次：清掉 14 天前的视频分析产物（联系表/文案）
         if (watcherPaused) return
         if (busy) return
         busy = true
