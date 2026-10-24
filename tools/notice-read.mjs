@@ -44,7 +44,7 @@ const TYPE_NAME = {
 }
 const GROUPS = [700, 960, 401, 601]
 
-/** 把一条通知压成人类可读的形状（逻辑照抄 notice-read.py 的 norm） */
+/** 把一条通知压成人类可读的形状 */
 function norm(it) {
   const t = it.type
   const rec = {
@@ -54,22 +54,35 @@ function norm(it) {
     create_time: it.create_time === undefined ? null : it.create_time,
   }
   for (const key of ['at', 'comment', 'digg', 'follow', 'fans', 'im', 'system']) {
-    const blk = it[key]
-    if (!blk || typeof blk !== 'object') continue
-    const ui = blk.user_info || blk.from_user || {}
+    const raw = it[key]
+    if (!raw || typeof raw !== 'object') continue
+    // ⚠️ type=31（回复了你的评论）的真实数据埋在 **comment.comment** 里（两层）：
+    //      comment.comment = { cid, text, aweme_id, user:{nickname,...} }
+    //      comment.parent_id = 「我那条被回复的评论」的 cid
+    //    （2026-10-24 移植时只钻了一层，通知列出来 2 条却字段全空）
+    let blk = raw
+    for (let d = 0; d < 2; d++) {
+      if (blk.comment && typeof blk.comment === 'object') blk = blk.comment
+    }
+    const ui = blk.user || blk.user_info || blk.from_user || raw.user || raw.user_info || {}
     rec.nickname = ui.nickname || ''
     rec.uid = ui.uid || ''
-    rec.content = String(blk.content || '').trim()
-    const sch = String(blk.schema_url || '')
+    rec.content = String(blk.text || blk.content || '').trim()
+    const sch = String(blk.schema_url || raw.schema_url || '')
     rec.schema_url = sch
-    // aweme://aweme/detail/<aweme_id>?cid=<comment_id>&reply_id=<reply_id>
+    // 1) 评论 cid：优先 blk.cid（对方那条评论），用于回评
+    if (blk.cid) rec.comment_id = String(blk.cid)
+    // 2) 我那条被回复的评论 cid（type=31 才有）
+    if (raw.parent_id) rec.parent_id = String(raw.parent_id)
+    // 3) 兜底：从 schema_url 里抠（aweme://aweme/detail/<id>?cid=..&reply_id=..）
     if (sch.includes('aweme/detail/')) {
       const parts = sch.split('aweme/detail/')[1] || ''
       rec.aweme_id = parts.split('?')[0].split('&')[0]
-      if (sch.includes('cid=')) rec.comment_id = sch.split('cid=')[1].split('&')[0]
+      if (!rec.comment_id && sch.includes('cid=')) rec.comment_id = sch.split('cid=')[1].split('&')[0]
       if (sch.includes('reply_id=')) rec.reply_id = sch.split('reply_id=')[1].split('&')[0]
     }
-    if (blk.aweme_id) rec.aweme_id = rec.aweme_id || String(blk.aweme_id)
+    const aw = blk.aweme_id || raw.aweme_id || it.aweme_id
+    if (aw) rec.aweme_id = rec.aweme_id || String(aw)
     if (rec.aweme_id) {
       rec.video_url = `${BASE}/video/${rec.aweme_id}`
       if (rec.comment_id) rec.comment_url = `${BASE}/video/${rec.aweme_id}?comment_id=${rec.comment_id}`

@@ -66,6 +66,15 @@ try {
   const c = await openPage()
   const chromed = c.status
 
+  // 🔴 无头 Chrome 的 UA 带 `HeadlessChrome`：抖音的**写接口**对它回 `200 + 空 body`
+  //    （看起来成功、其实没发出去）。2026-10-24 实测：@ 了 UA 之后同一个请求就正常返回 cid。
+  try {
+    const realUA = String(await c.ev('navigator.userAgent')).replace('HeadlessChrome', 'Chrome')
+    await c.send('Network.enable')
+    await c.send('Network.setUserAgentOverride', { userAgent: realUA, acceptLanguage: 'zh-CN,zh;q=0.9', platform: 'Win32' })
+    await sleep(300)
+  } catch { /* 覆盖失败也照旧尝试 */ }
+
   // 必须站在 douyin.com 上，相对路径 fetch 才带得上 cookie / 页面签名器
   const cur = String(await c.ev('location.href'))
   if (!cur.includes('douyin.com')) {
@@ -80,6 +89,15 @@ try {
     process.exitCode = 0
     // 走到这里自然结束，别用 process.exit（会触发 libuv 断言）
     throw { __done: true }
+  }
+
+  // 🔴 必须在**目标视频页**的上下文里发这条写请求。
+  //    2026-10-24 实测：停在 /chat 上调用发布接口，服务器回 `200 + 空 body`（拿不到 cid）；
+  //    换成"先导航到 /video/<aweme> 再发"，同样的参数一次就返回 cid。
+  //    这条坑很容易被误判成"账号被风控"，其实是**页面上下文不对**。
+  if (!String(await c.ev('location.href')).includes(`/video/${AWEME}`)) {
+    await c.send('Page.navigate', { url: `https://www.douyin.com/video/${AWEME}` })
+    await sleep(6000)
   }
 
   const js = `(async function(){
