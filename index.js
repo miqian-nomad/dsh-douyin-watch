@@ -404,11 +404,18 @@ export function apply(ctx, config) {
             const raw = await new Promise((r) => { let d = ''; req.on('data', (c) => { d += c }); req.on('end', () => r(d)) })
             body = JSON.parse(raw || '{}')
           } catch { /* 空 body 也允许 */ }
+          // ⚠️ 写盘前先读一次磁盘上的现有内容再合并（2026-10-24 修）：
+          //    以前直接写 fileCfg，等于「用内存里认识的键覆盖整个文件」——
+          //    结果：① 手写进文件的新键被抹掉；② 新版前端保存的、当前宿主还不认识的键被丢弃
+          //    （实测：把 replyMode 写进文件后，被一次无关的保存整键抹掉）。
+          let diskCfg = {}
+          try { diskCfg = JSON.parse(readFileSync(cfg.cfgFile, 'utf8')) || {} } catch { diskCfg = {} }
           for (const k of TOGGLE_KEYS) {
-            if (body[k] !== undefined) { cfg[k] = body[k]; fileCfg[k] = body[k] }
+            if (body[k] !== undefined) { cfg[k] = body[k]; fileCfg[k] = body[k]; diskCfg[k] = body[k] }
           }
-          try { writeFileSync(cfg.cfgFile, JSON.stringify(fileCfg, null, 2)) } catch (e) { log('写配置失败：' + (e && e.message)) }
-          log('设置已更新：' + JSON.stringify(fileCfg))
+          try { writeFileSync(cfg.cfgFile, JSON.stringify(diskCfg, null, 2)) } catch (e) { log('写配置失败：' + (e && e.message)) }
+          fileCfg = { ...fileCfg, ...diskCfg }
+          log('设置已更新：' + JSON.stringify(diskCfg))
           // ⭐ 开关要**立刻生效**（2026-10-24 修）：以前 enabled 只在挂载时读一次，
           //    设置里关掉哨兵照跑、打开也永远不启动 —— 用户实测到的那件事就是这个。
           if (body.enabled !== undefined) {
