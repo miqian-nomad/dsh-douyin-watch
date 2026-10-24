@@ -1,0 +1,61 @@
+{
+  "name": "@local/dsh-douyin-watch",
+  "version": "0.1.1",
+  "description": "Douyin (抖音) automation for DeepSeek Harness: watch private messages and wake the agent event-driven, plus 10 tools (read DM, send DM, comment, @ mention, reply, delete comment, read notice, share video card, pick feed candidates, cookie backup/restore) — all through one headless Chrome with anti-detection, no dependency on the DSH browser service.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "locale/*.json",
+    "icon.svg",
+    "lib",
+    "tools"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.4",
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.1"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/miqian-nomad/dsh-douyin-watch.git"
+  },
+  "homepage": "https://github.com/miqian-nomad/dsh-douyin-watch#readme",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "douyin",
+    "tiktok",
+    "private-message",
+    "comment",
+    "mention",
+    "social-automation",
+    "agent",
+    "automation"
+  ]
+}

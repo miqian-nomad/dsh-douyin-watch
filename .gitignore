@@ -1,0 +1,23 @@
+node_modules/
+*.log
+.DS_Store
+
+# ── 本机私有物：绝不要进仓库（2026-10-24 加）──
+# 凭据：douyin_cookie.txt 含 HttpOnly sessionid，泄露 = 账号被接管
+douyin_cookie.txt
+*.cookie
+# 本机身份 / 运行态（公开仓库不带个人标识）
+peer.json
+watch-config.json
+watch-known.json
+watcher.lock
+runtime.json
+collector.json
+auto-scroll-state.json
+notice.json
+forward-pick.json
+# 本地备份与临时目录
+*.bak
+*.bak-*
+*.pre-merge-*
+_tmp/

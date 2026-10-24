@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="14" fill="#111827"/>
+  <!-- 眼睛：哨兵在看 -->
+  <ellipse cx="24" cy="30" rx="14" ry="9" fill="none" stroke="#38bdf8" stroke-width="3"/>
+  <circle cx="24" cy="30" r="4" fill="#38bdf8"/>
+  <!-- 消息气泡：有新消息 -->
+  <path d="M36 20 H54 a6 6 0 0 1 6 6 V38 a6 6 0 0 1 -6 6 H44 l-6 7 v-7 h-2 a6 6 0 0 1 -6 -6 V26 a6 6 0 0 1 6 -6 z" fill="#22d3ee" stroke="#0e7490" stroke-width="2"/>
+  <circle cx="41" cy="32" r="2" fill="#0e7490"/>
+  <circle cx="48" cy="32" r="2" fill="#0e7490"/>
+  <circle cx="55" cy="32" r="2" fill="#0e7490"/>
+</svg>

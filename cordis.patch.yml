@@ -1,0 +1,31 @@
+# ============================================================================
+# dsh-douyin-watch —— DSH bundle patch（插件自带的挂载声明）
+# ============================================================================
+# 装法：dsh plugin --profile web add link:D:\dsh-plugins\dsh-douyin-watch
+# 装完必须重启一次 dsh（bundle 层要重启才组装）
+#
+# ⚠️ 这里只放「身份类」配置（改了就换目标的那种）。
+#    可开关的键（enabled / intervalSeconds / maxWakeText / ownerAutoReply /
+#    strangerPolicy / sessionId）交给设置页写 $HOME/watch-config.json ——
+#    放在 cordis 里的话设置页永远改不动（cordis 层优先级最高）。
+#
+# 🔴 `home` + `cfgFile` **必须显式写死**（2026-10-24 血泪）：
+#    同一个 DSH 会同时加载多个 profile（web / desktop）的插件实例。
+#    如果不写死，A 实例的 home 会落到 `~/.dsh/douyin-duty`、B 实例读 desktop
+#    patch 里那份 `D:\douyin-duty` —— 于是「设置页改的和哨兵读的不是同一个文件」，
+#    表现出来就是：改了没用、重启后配置像丢了、两个哨兵抢同一个浏览器。
+#    写死之后所有实例共用一个文件，再由 index.js 的 watcher.lock 保证只有一个在跑。
+# ============================================================================
+
+- insert:
+    - id: douyin-watch          # ⭐ 必须等于命名空间名
+      name: '@local/dsh-douyin-watch'
+      config:
+        home: 'D:\douyin-duty'
+        cfgFile: 'D:\douyin-duty\watch-config.json'
+        chatUrl: 'https://www.douyin.com/chat'
+        peer: '迷迁'
+        logFile: 'D:\douyin-duty\watch-plugin.log'
+        owner: '迷迁'
+        targetCwd: 'D:\work-harness\2026-10-23-15-50-29'
+        commentUrl: 'https://www.douyin.com/video/7692296548180446504'
