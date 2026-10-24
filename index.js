@@ -107,6 +107,11 @@ const DEFAULTS = {
   // 主人消息要不要自动回。**默认 false = 只提醒、不自动说话**（2026-10-24 改）
   // 理由：一条误导/伪造的消息就能让账号在私信甚至公开评论区替你说话，自动说话必须是显式选择。
   ownerAutoReply: false,
+  // 回信形态（设置页可切换）：
+  //   conclusion（默认）＝ 结论直接写进 douyin_send 的 text，DSH 只留一句回执
+  //                        —— 主人不在电脑前也能看到完整结论，不会出现"抖音一句话、DSH 一大篇"
+  //   brief             ＝ DSH 写详细、私信只发简版（老行为）
+  replyMode: 'conclusion',
   // ── 自动刷视频（每项都有独立开关）──
   autoScrollEnabled: false, // 总开关：关掉就完全不跑
   autoScrollWindows: ['12:00-14:00', '18:00-09:00'], // 自动跑的时间段，可增删
@@ -314,7 +319,7 @@ export function apply(ctx, config) {
   const toolDisposers = [] // 每个工具注册返回的卸载函数；插件卸载时一起清掉，避免热重载撞「already registered」
 
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
-  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
+  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -1434,10 +1439,18 @@ export function apply(ctx, config) {
                 : '只提醒主人，**不要回**。\n')
 
           log(`🔔 唤醒 agent：${theirs.length} 条新消息（ownerAutoReply=${cfg.ownerAutoReply}）`)
+          // 回复形态（设置页可切换）：
+          //   conclusion（默认）＝ 结论直接写进 douyin_send 的 text，DSH 只留一句回执 —— 主人不在电脑前也能看到完整结论
+          //   brief             ＝ DSH 写详细、私信只发一段简版（老行为）
+          const replyModeLine = String(cfg.replyMode || 'conclusion') === 'brief'
+            ? '回完在聊天里说一句「已回：…」（私信内容可以比这里的说明简短）。'
+            : '你的**结论直接写进 douyin_send 的 text**（完整、可读、口语化，别用 markdown 表格/代码块）——'
+              + '主人手机上只能看到这条、看不到 DSH，所以别写两份、也别只发一句「在」。'
+              + '发完后在 DSH 正文里只留一句「已回：<一句话摘要>」。'
           const prompt =
             `抖音有 ${theirs.length} 条新私信（来自「${cfg.peer}」）：\n${body}${more}\n\n` +
             senderLine +
-            `回完在聊天里说一句「已回：…」。` +
+            replyModeLine +
             `\n🔴 红线：私密内容只能走 douyin_send（私信）；douyin_comment_at 是公开评论区，绝不把私聊内容放进去。主人让你去评论区时，先私信回一句「好，马上去看」，再去评论区回——两处都要回。`
 
           // 投递前先确认能解析出模型路由：解析不到就别投，否则人设里的 {{model}}

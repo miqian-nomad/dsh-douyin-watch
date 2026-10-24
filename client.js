@@ -246,6 +246,16 @@ window.__ModuleLoader__.load({
             h(SessionPicker, { current: cfg.sessionId || '', onPick: (v) => save({ sessionId: v }) }),
           ),
           h(Row, { label: '主人消息自动回复', hint: '关 = 只提醒，不自动回' }, h(Switch, { checked: !!cfg.ownerAutoReply, onChange: (v) => save({ ownerAutoReply: v }) })),
+          h(Row, { label: '私信发什么', hint: '「完整结论」= 手机上看到的就是结论本身；「简版」= DSH 写详细、私信只发一段' },
+            h('select', {
+              value: cfg.replyMode || 'conclusion',
+              onChange: (e) => save({ replyMode: e.target.value }),
+              style: Object.assign({}, ctlBase, { width: 132 }),
+            },
+              h('option', { value: 'conclusion' }, '完整结论'),
+              h('option', { value: 'brief' }, '简版'),
+            ),
+          ),
           h(Row, { label: '非主人消息' },
             h('select', {
               value: cfg.strangerPolicy || 'notify',
