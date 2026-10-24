@@ -19,7 +19,7 @@
 
 - insert:
     - id: douyin-watch          # ⭐ 必须等于命名空间名
-      name: '@local/dsh-douyin-watch'
+      name: 'dsh-douyin-watch'
       config:
         home: 'D:\douyin-duty'
         cfgFile: 'D:\douyin-duty\watch-config.json'

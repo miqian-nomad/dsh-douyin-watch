@@ -21,3 +21,7 @@ forward-pick.json
 *.bak-*
 *.pre-merge-*
 _tmp/
+
+__pycache__/
+*.pyc
+

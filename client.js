@@ -1,7 +1,7 @@
 // dsh-douyin-watch 设置页
 // 视觉规范照 DSH 自身设置页：button[role=switch] 滑块、卡片分区、统一下拉/输入框
 window.__ModuleLoader__.load({
-  id: '@local/dsh-douyin-watch',
+  id: 'dsh-douyin-watch',
   factory(require) {
     const React = require('react');
     const { useState, useEffect } = React;
