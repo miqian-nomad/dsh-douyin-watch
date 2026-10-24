@@ -36,16 +36,19 @@
  *      `Network.setUserAgentOverride` 把 Headless 标记去掉（feed-pick / notice-read 已内置）
  *   ⑳ 页面内请求期间必须 `pauseWatcher()`：哨兵每几秒把页面导航回 /chat，执行上下文一抽，
  *      fetch 就永远不 resolve —— 表现为"脚本卡死"，不是超时也不是报错
- *   ⑲ `ctx.agents.resume({ resumeSessionId })` **必须**在 setup 里补模型路由（installRouteForResumedAgent）：
+ *   ㉑ `ctx.agents.resume({ resumeSessionId })` **必须**在 setup 里补模型路由（installRouteForResumedAgent）：
  *      不传 agentOptions 时 options 是空对象，预设人设的 {{model}} 会让整轮组装直接抛
  *      `prompt variable "{{model}}" has no value for this assembly (section "deployment:persona-prefix")`
- *   ㉑ 裸 `ctx.agents.resume()` **不会挂 preset**（installPresetForResumedAgent）：preset 决定
+ *   ㉒ 裸 `ctx.agents.resume()` **不会挂 preset**（installPresetForResumedAgent）：preset 决定
  *      这条会话有哪些工具/提示词/技能，必须在 setup 里
  *      `ctx.get('agentPresets').mount(agentCtx, <会话头里的 agentPreset>)`。
  *      GUI 打开会话走 api-session 的 composeAgent（resolve + mount）；不挂 = 会话里没有
  *      pwsh/read/edit，唤醒消息投递成功但模型没工具可用。
- *   ㉒ 读私信必须 `--force-chat`：页面停在首页 /「验证码中间页」也算 douyin.com，
+ *   ㉓ 读私信必须 `--force-chat`：页面停在首页 /「验证码中间页」也算 douyin.com，
  *      不强制导航就永远读到 0 条、永远静默返回空 —— 和「没有新消息」长得一模一样。
+ *   ㉔ 清缓存会**先关浏览器再删**（不关就 EPERM），重启后有概率撞「验证码中间页」，
+ *      那 30–60 秒读不到私信；期间主人发的消息会推迟到下一轮才唤醒 —— 不是丢消息，
+ *      但看起来像"机器人装死"（2026-10-24 因此被骂过一次）。别在清理前后一分钟等回复。
  * ============================================================================
  */
 import { appendFileSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
