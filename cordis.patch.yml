@@ -1,7 +1,7 @@
 # ============================================================================
 # dsh-douyin-watch —— DSH bundle patch（插件自带的挂载声明）
 # ============================================================================
-# 装法：dsh plugin --profile web add link:D:\dsh-plugins\dsh-douyin-watch
+# 装法：dsh plugin --profile web add link:<本仓库路径>
 # 装完必须重启一次 dsh（bundle 层要重启才组装）
 #
 # ⚠️ 这里只放「身份类」配置（改了就换目标的那种）。
