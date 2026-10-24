@@ -267,3 +267,13 @@ notice_list_v2[].comment.comment = {
 - `locale/*.json`、`icon.svg` —— 插件列表里的中文名/描述/图标
 - `tools/*.mjs` —— 10 个动作脚本（纯 Node，无 Python 依赖）
 - `tools/*.py` —— **已弃用**，仅历史参考
+
+## 维护：清浏览器缓存（2026-10-24 加）
+
+设置页「维护 → 清理浏览器缓存」= POST /api/douyin-watch/cleanup → 	ools/clean-cache.mjs。
+
+- **只删白名单目录**：Default/Cache、Default/Code Cache、*GPUCache、*ShaderCache、Service Worker、component_crx_cache、Safe Browsing、CertificateRevocation、WasmTtsEngine（删了 Chrome 会重建）
+- **绝不碰**：Default/Network/Cookies、Preferences、Local State、Default/Local Storage、Default/IndexedDB —— 脚本清完会**再自检一遍**这些文件是否还在，丢了直接报错
+- 先 Browser.close 再删（不然 EPERM），并等 CDP 端口真的死掉；删不掉的目录会二次重试
+- 顺带清 $HOME/inbox 里 7 天前的聊天图片（表情/封面）
+- 实测：profile 608.7 MB → 40.4 MB；清完浏览器自动重启，30 秒内恢复读取

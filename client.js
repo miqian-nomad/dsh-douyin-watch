@@ -163,6 +163,7 @@ window.__ModuleLoader__.load({
       const [rows, setRows] = useState(null);
       const [note, setNote] = useState('');
       const [status, setStatus] = useState(null);
+      const [cleaning, setCleaning] = useState(false);
 
       const load = () => fetch('/api/douyin-watch/config')
         .then((r) => r.json())
@@ -318,6 +319,28 @@ window.__ModuleLoader__.load({
               placeholder: 'D:\\path\\to\\dir',
               style: Object.assign({}, ctlBase, { width: 240 }),
             }),
+          ),
+        ),
+        h(Card, { title: '维护' },
+          h(Row, { label: '清理浏览器缓存', hint: '只删 Cache / Code Cache 等可重建目录 + 7 天前的收件箱图片；Cookies 与本地存储一个字节不动' },
+            h('button', {
+              type: 'button',
+              onClick: () => {
+                if (cleaning) return
+                setCleaning(true)
+                setNote('正在清理（会先关掉那个无头浏览器，几十秒）…')
+                fetch('/api/douyin-watch/cleanup', { method: 'POST' })
+                  .then((r) => r.json())
+                  .then((d) => {
+                    if (d.ok) setNote(`清理完成：释放 ${d.freedMB} MB（${(d.removed || []).length} 项），登录态保留`)
+                    else setNote('清理出错：' + ((d.errors && d.errors[0]) || '未知'))
+                  })
+                  .catch(() => setNote('清理失败：接口没返回'))
+                  .then(() => setCleaning(false))
+              },
+              disabled: cleaning,
+              style: Object.assign({}, ctlBase, { width: 'auto', padding: '0 12px', cursor: cleaning ? 'default' : 'pointer', color: C.text2 }),
+            }, cleaning ? '清理中…' : '清理缓存'),
           ),
         ),
 

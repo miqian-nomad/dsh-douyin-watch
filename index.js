@@ -398,6 +398,24 @@ export function apply(ctx, config) {
         if (req.method === 'GET' && pathname === '/api/douyin-watch/config') {
           return sendJson(200, { ok: true, config: await view() })
         }
+        // POST /api/douyin-watch/cleanup —— 清浏览器缓存（脚本里是白名单，绝不动 Cookies / Local Storage）
+        if (req.method === 'POST' && pathname === '/api/douyin-watch/cleanup') {
+          pauseWatcher()
+          let r
+          try {
+            r = await runNode(join(HERE, 'tools', 'clean-cache.mjs'), ['--inbox-days', '7'], 240000)
+          } finally {
+            resumeWatcher()
+          }
+          const p = r.parsed || {}
+          log('清缓存：' + (p.ok ? `释放 ${p.freedMB} MB（${(p.removed || []).length} 项）` : '失败 ' + JSON.stringify((p.errors || []).slice(0, 3))))
+          return sendJson(200, {
+            ok: !!p.ok,
+            freedMB: Number(p.freedMB) || 0,
+            removed: Array.isArray(p.removed) ? p.removed : [],
+            errors: Array.isArray(p.errors) ? p.errors : (p.error ? [String(p.error)] : []),
+          })
+        }
         if (req.method === 'POST' && pathname === '/api/douyin-watch/config') {
           let body = {}
           try {
