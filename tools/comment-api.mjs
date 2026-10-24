@@ -91,13 +91,37 @@ try {
     throw { __done: true }
   }
 
-  // 🔴 必须在**目标视频页**的上下文里发这条写请求。
-  //    2026-10-24 实测：停在 /chat 上调用发布接口，服务器回 `200 + 空 body`（拿不到 cid）；
-  //    换成"先导航到 /video/<aweme> 再发"，同样的参数一次就返回 cid。
-  //    这条坑很容易被误判成"账号被风控"，其实是**页面上下文不对**。
+  // ⚠️ 先导航到目标视频页再发（写接口在视频页上下文里才稳）。
+  //    但**别把成功归因于"页面上下文"** —— 2026-10-24 的真实链路是：
+  //      /chat → /video/<aweme> 这一跳**会触发验证码滑块**（rc-verifycenter / 验证码中间页）；
+  //      人手工划过了，导航才真的落地，写接口才返回 cid；
+  //      没人过 = 页面被拦在验证页，发布接口回 `200 + 空 body` 或 403。
+  //    所以下面要**检测是否被验证拦住**并如实报错，不许再静默重试五次。
   if (!String(await c.ev('location.href')).includes(`/video/${AWEME}`)) {
     await c.send('Page.navigate', { url: `https://www.douyin.com/video/${AWEME}` })
     await sleep(6000)
+  }
+  try {
+    const st = JSON.parse(String(await c.ev(`(function(){
+      var t = String(document.title || '');
+      var f = !!document.querySelector('iframe[src*="rc-verifycenter"], iframe[src*="verifycenter"], iframe[src*="/captcha"]');
+      return JSON.stringify({ title: t, verify: f || /验证码|安全验证/.test(t), href: String(location.href) });
+    })()`)) || {})
+    if (st.verify) {
+      c.close()
+      await sleep(200)
+      out({
+        ok: false,
+        verify_required: true,
+        error: '被验证码拦住：从私信页跳到视频页会触发滑块，需要人工在**有头窗口**里划一次',
+        hint: '切有头：杀掉占 9334 的进程，再用同一个 user-data-dir 加 --headless=off 启动，人工过验证后重跑本脚本',
+        href: st.href,
+      })
+      throw { __done: true }
+    }
+  } catch (e) {
+    if (e && e.__done) throw e
+    // 检测本身失败就继续（别因为探测失败就不发）
   }
 
   const js = `(async function(){
