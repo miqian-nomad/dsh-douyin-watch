@@ -104,8 +104,13 @@ try {
   try {
     const st = JSON.parse(String(await c.ev(`(function(){
       var t = String(document.title || '');
-      var f = !!document.querySelector('iframe[src*="rc-verifycenter"], iframe[src*="verifycenter"], iframe[src*="/captcha"]');
-      return JSON.stringify({ title: t, verify: f || /验证码|安全验证/.test(t), href: String(location.href) });
+      var vf = document.querySelector('iframe[src*="rc-verifycenter"], iframe[src*="verifycenter"], iframe[src*="/captcha"]');
+      // ⚠️ 那个 iframe 是**页面常驻**的（没拦人也挂在 DOM 里），只看"存在"会误报。
+      //    只有它真的可见、或者标题变成验证码页，才算被拦。
+      var vis = !!(vf && vf.offsetWidth > 2 && vf.offsetHeight > 2 && getComputedStyle(vf).visibility !== 'hidden');
+      var hasVideo = !!document.querySelector('video');
+      var verify = /验证码|安全验证/.test(t) || (vis && !hasVideo);
+      return JSON.stringify({ title: t, verify: verify, hasVideo: hasVideo, iframeVisible: vis, href: String(location.href) });
     })()`)) || {})
     if (st.verify) {
       c.close()
