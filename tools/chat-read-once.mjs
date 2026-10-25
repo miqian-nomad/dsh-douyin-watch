@@ -101,7 +101,10 @@ const READ_SCRIPT = `(function () {
         else if (/^(data|blob):/.test(bsrc)) img = bsrc;
       }
     } catch (e) {}
-    out.push({ own: side, text: text, img: img, keys: Object.keys(pc).slice(0, 12), sid: found.serverId ? String(found.serverId) : '', read: /已读/.test(n.innerText || '') });
+    // item = 分享卡片的视频 id（aweType 800 / MessageItemShareAweme 里带 itemId）。
+    //   有了它，哨兵才能在"主人发来一条视频"时直接给出可分析的链接，而不是让 agent 去猜。
+    var item = String(pc.itemId || pc.aweme_id || pc.awemeId || '');
+    out.push({ own: side, text: text, img: img, item: item, keys: Object.keys(pc).slice(0, 12), sid: found.serverId ? String(found.serverId) : '', read: /已读/.test(n.innerText || '') });
   });
   var carry = '';
   for (var i = out.length - 1; i >= 0; i--) {

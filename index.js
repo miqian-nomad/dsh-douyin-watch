@@ -156,6 +156,8 @@ const DEFAULTS = {
   commentDeleteScript: join(HERE, 'tools', 'comment-delete.mjs'),
   commentScript: join(HERE, 'tools', 'comment-mention-ui.mjs'),
   noticeScript: join(HERE, 'tools', 'notice-read.mjs'),
+  // 视频分析：截媒体直链（9334 已登录浏览器）→ 技能做下载/ASR/抽帧
+  analyzeScript: join(HERE, 'tools', 'analyze-video.mjs'),
 }
 
 const norm = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase()
@@ -1138,6 +1140,66 @@ export function apply(ctx, config) {
       }))
 
       regTool(defineTool({
+        name: 'douyin_analyze',
+        description: '把一条抖音视频下到本地并做离线分析：语音转文字（faster-whisper）+ 抽帧拼成**一张**联系表。返回 transcript.md 与 contact_sheet.jpg 的路径。主人发来视频分享卡片时应当**主动**调用，不用等他开口说“分析这条”。',
+        parameters: {
+          url: { type: 'string', description: '视频链接或视频 id；不传就用「最近一条私信里的视频卡片」' },
+        },
+        output: {
+          schema: {
+            type: 'object', additionalProperties: false,
+            required: ['ok'],
+            properties: {
+              ok: { type: 'boolean' }, aweme_id: { type: 'string' }, title: { type: 'string' },
+              duration_s: { type: 'number' }, language: { type: 'string' },
+              transcript: { type: 'string' }, contact_sheet: { type: 'string' },
+              preview: { type: 'string' }, detail: { type: 'string' },
+            },
+          },
+          render: (_args, value) => TEXT(value.detail || (value.ok ? '分析完成' : '分析失败')),
+        },
+        async execute(args) {
+          const url = String((args && args.url) || '').trim()
+          let aweme = awemeIdOf(url)
+          if (!aweme) {
+            // 没传就用「最近一张分享卡片」——这是"主人发了视频我直接分析"的关键
+            try {
+              const p = join(cfg.home || HOME, 'last-share.json')
+              if (existsSync(p)) {
+                const j = JSON.parse(readFileSync(p, 'utf8')) || {}
+                aweme = String(j.aweme || '').trim()
+              }
+            } catch { /* 读不到就当没卡片 */ }
+          }
+          if (!aweme) return { ok: false, detail: '没有视频链接，也还没收到过分享卡片（可以让主人把视频转发给你）' }
+          pauseWatcher()
+          try {
+            const r = await runNode(cfg.analyzeScript, ['--aweme', aweme], 8 * 60 * 1000)
+            const p = r.parsed || {}
+            if (!p.ok) {
+              return {
+                ok: false, aweme_id: aweme,
+                detail: (p.error || (r.error && r.error.message) || '分析失败') + (p.hint ? `（${p.hint}）` : ''),
+              }
+            }
+            return {
+              ok: true,
+              aweme_id: p.aweme_id,
+              title: p.title || '',
+              duration_s: Number(p.duration_s) || undefined,
+              language: p.language || '',
+              transcript: p.transcript || '',
+              contact_sheet: p.contact_sheet || '',
+              preview: p.preview || '',
+              detail: `已分析 ${p.aweme_id}：${p.text_chars} 字文案 / ${p.frames} 帧；画面只读 ${p.contact_sheet}，正文读 ${p.transcript}`,
+            }
+          } finally {
+            resumeWatcher()
+          }
+        },
+      }))
+
+      regTool(defineTool({
         name: 'douyin_comment_at',
         description: '在指定抖音视频的评论区发一条评论，并用「真 @」提及主人（走评论接口 + text_extra，对方会收到通知）。🔴 公开可见：只能发本来就该公开的内容，绝不把私密对话内容放进来；私密回复走私信 douyin_send。',
         parameters: {
@@ -1580,6 +1642,27 @@ export function apply(ctx, config) {
             return '- ' + bits.join(' ')
           }).join('\n')
           const more = theirs.length > cfg.maxWakeText ? `\n…另有 ${theirs.length - cfg.maxWakeText} 条` : ''
+
+          // 🎬 主人发来「视频分享卡片」⇒ 不用他再说「分析这条」：
+          //    把链接和"先分析再回"的指令直接写进唤醒消息，并落一份 last-share.json
+          //    给 douyin_analyze 当默认目标（工具不传 url 时用它）。
+          const card = theirs.find((m) => m.item && String(m.item).length >= 15)
+          let cardLine = ''
+          if (card) {
+            const vurl = `https://www.douyin.com/video/${card.item}`
+            try {
+              writeFileSync(join(cfg.home || HOME, 'last-share.json'), JSON.stringify({
+                aweme: String(card.item),
+                title: String(card.text || '').slice(0, 200),
+                sid: card.sid || '',
+                at: new Date().toISOString(),
+              }, null, 2))
+            } catch { /* 落盘失败不影响唤醒 */ }
+            cardLine = `\n🎬 主人发来的是一条**视频分享卡片**：${vurl}\n` +
+              `   → 不用等他再说"分析这条"：**先调 douyin_analyze（url 传这条链接，或干脆不传）**，` +
+              `拿到 transcript.md + contact_sheet.jpg 之后再来回。\n` +
+              `   → 画面**只读 contact_sheet.jpg 这一张**（别逐帧读，30 帧=30 次视觉调用）；结论以文案为主。\n`
+          }
           const replyLine = cfg.ownerAutoReply === false
             ? '**自动回复已暂停：只提醒，不要回。**\n'
             : '**直接回，不用等确认**（优先用 douyin_send 工具；被风控时它会返回 delivered=false）。\n'
@@ -1604,7 +1687,8 @@ export function apply(ctx, config) {
           const personaShort = String(cfg.personaShort || '').trim()
           const personaLine = personaShort ? `人设：${personaShort}\n` : ''
           const prompt =
-            `抖音有 ${theirs.length} 条新私信（来自「${cfg.peer}」）：\n${body}${more}\n\n` +
+            `抖音有 ${theirs.length} 条新私信（来自「${cfg.peer}」）：\n${body}${more}\n` +
+            cardLine + '\n' +
             personaLine +
             senderLine +
             replyModeLine +
