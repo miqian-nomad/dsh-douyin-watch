@@ -1,6 +1,6 @@
 {
   "name": "dsh-douyin-watch",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Douyin (抖音) automation for DeepSeek Harness: watch private messages and wake the agent event-driven, plus 10 tools (read DM, send DM, comment, @ mention, reply, delete comment, read notice, share video card, pick feed candidates, cookie backup/restore) — all through one headless Chrome with anti-detection, no dependency on the DSH browser service.",
   "license": "MIT",
   "type": "module",
