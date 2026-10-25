@@ -451,7 +451,7 @@ window.__ModuleLoader__.load({
             h('input', {
               value: cfg.commentSkipNicks || '',
               onChange: (e) => save({ commentSkipNicks: e.target.value }),
-              placeholder: '豆包',
+              placeholder: '豆包,抖音求真',
               style: Object.assign({}, ctlBase, { width: 240 }),
             }),
           ),

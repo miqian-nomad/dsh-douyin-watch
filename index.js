@@ -150,7 +150,7 @@ const DEFAULTS = {
   commentWorkMaxAgeDays: 7,
   // 不回的账号（昵称命中就跳过）：机器人 / 平台客服号，回它们既没意义，
   //   而且它们的评论常被折叠 —— 发了服务端也查不到（豆包那种，2026-10-25 实测三次都是假成功）。
-  commentSkipNicks: '豆包',
+  commentSkipNicks: '豆包,抖音求真',
   // 只有 @ 没有内容的评论不硬回（回"在呢"就是客服腔）
   commentSkipPureMention: true,
   // 自己作品下的评论：以**评论列表**为准（通知会延迟、有条数上限）。
