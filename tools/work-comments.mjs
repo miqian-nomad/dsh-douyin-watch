@@ -10,7 +10,7 @@
  *   ⇒ 自己作品下的评论**以评论列表为准**；通知只用来补充"别人回复了我评论"（type 31）。
  *
  * 用法:
- *   node tools/work-comments.mjs --aweme 7700523174529600831 [--max 20] [--max-age-hours 48]
+ *   node tools/work-comments.mjs --aweme <作品id> [--max 20] [--max-age-hours 48]
  *   node tools/work-comments.mjs --aweme id1,id2
  *
  * 输出一行 JSON：

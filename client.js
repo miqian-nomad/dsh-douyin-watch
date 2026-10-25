@@ -443,7 +443,7 @@ window.__ModuleLoader__.load({
             h('input', {
               value: cfg.myWorks || '',
               onChange: (e) => save({ myWorks: e.target.value }),
-              placeholder: 'https://www.douyin.com/video/7700523174529600831',
+              placeholder: 'https://www.douyin.com/video/<作品id>',
               style: Object.assign({}, ctlBase, { width: 380 }),
             }),
           ),
