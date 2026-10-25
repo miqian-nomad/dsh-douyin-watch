@@ -62,6 +62,7 @@ import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
+import { checkPublicComment, recordPublicComment, guardStats } from './lib/outbound-guard.mjs'
 
 // 插件自身目录（用于定位 tools/ 里的脚本，让包自包含、不依赖外部路径）
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -125,6 +126,15 @@ const DEFAULTS = {
   //                  之后靠会话记忆，不在每轮重复 —— 这才是省 token 的关键
   personaShort: '',
   personaFull: '',
+  // ── 公开评论的人设与闸门（2026-10-25 加）──
+  //   为什么单独一份：私信里可以撒娇卖萌叫主人，**评论区是公开的**，
+  //   那套称呼放到别人视频下面会很怪、也容易被人拿去做文章。
+  personaPublic: '',                 // 公开评论专用语气（≤200 字，空 = 不提要求）
+  personaBannedWords: '亲,客服腔,欢迎关注,家人们,已读,感谢您的支持', // 命中就拒发
+  commentMaxChars: 60,               // 公开评论字数上限
+  commentPerHour: 6,                 // 每小时最多几条（防批量刷评）
+  commentPerDay: 30,                 // 每天最多几条
+  commentDedupeHours: 168,           // 同一条评论多久内不许重发（默认 7 天）
   // ── 自动刷视频（每项都有独立开关）──
   autoScrollEnabled: false, // 总开关：关掉就完全不跑
   autoScrollWindows: ['12:00-14:00', '18:00-09:00'], // 自动跑的时间段，可增删
@@ -334,7 +344,7 @@ export function apply(ctx, config) {
   const toolDisposers = [] // 每个工具注册返回的卸载函数；插件卸载时一起清掉，避免热重载撞「already registered」
 
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
-  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaShort', 'personaFull', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
+  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaShort', 'personaFull', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -367,7 +377,7 @@ export function apply(ctx, config) {
             return j && j.mode === 'headed' ? 'headed' : 'headless'
           } catch { return 'headless' }
         }
-        const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; o.browserMode = browserModeNow(); const hm = (t) => (t ? new Date(t).toLocaleTimeString(undefined, { hour12: false }) : String()); o.status = { enabled: !!cfg.enabled, bound: watched.size, lastRead: hm(runtime.lastReadAt), lastCount: runtime.lastCount, lastFresh: runtime.lastFresh, lastWake: hm(runtime.lastWakeAt), lastError: runtime.lastError, line: '哨兵：' + (cfg.enabled ? '运行中' : '已停止') + (watched.size ? '（盯 ' + watched.size + ' 个会话）' : String()) + ' · 最后读取 ' + hm(runtime.lastReadAt) + '（' + runtime.lastCount + ' 条） · 最后唤醒 ' + (hm(runtime.lastWakeAt) || '无') + (cfg.enabled ? String() : ' · 已停靠页面，不再回执已读') + (runtime.lastError ? ' · 错误：' + runtime.lastError : String()) }; return o }
+        const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; o.browserMode = browserModeNow(); const hm = (t) => (t ? new Date(t).toLocaleTimeString(undefined, { hour12: false }) : String()); o.status = { enabled: !!cfg.enabled, bound: watched.size, lastRead: hm(runtime.lastReadAt), lastCount: runtime.lastCount, lastFresh: runtime.lastFresh, lastWake: hm(runtime.lastWakeAt), lastError: runtime.lastError, line: '哨兵：' + (cfg.enabled ? '运行中' : '已停止') + (watched.size ? '（盯 ' + watched.size + ' 个会话）' : String()) + ' · 最后读取 ' + hm(runtime.lastReadAt) + '（' + runtime.lastCount + ' 条） · 最后唤醒 ' + (hm(runtime.lastWakeAt) || '无') + (cfg.enabled ? String() : ' · 已停靠页面，不再回执已读') + (runtime.lastError ? ' · 错误：' + runtime.lastError : String()) }; o.commentQuota = guardStats({ perHour: cfg.commentPerHour, perDay: cfg.commentPerDay }); return o }
         const pathname = (req.url || '').split('?')[0]
         // GET /api/douyin-watch/sessions —— 给设置页的「钉死会话」选择器（只读）
         //   优先问 DSH 自己的会话服务（就是 GUI 会话列表那份数据）；拿不到再扫 ~/.dsh/sessions 目录。
@@ -1235,6 +1245,18 @@ export function apply(ctx, config) {
           //   2026-10-25 实测：服务端原样保留 text_extra，@ 是真 @。
           const who = String((args && args.name) || cfg.owner || '').trim()
           if (!who) throw new Error('douyin_comment_at 需要知道 @ 谁（配置里的 owner 为空时请传 name）')
+
+          // 公开评论三道闸（同 douyin_comment）：长度 / 禁止词 / 站外引导 / 去重 / 频次
+          const gate = checkPublicComment({
+            text, aweme, target: who,
+            maxChars: cfg.commentMaxChars,
+            bannedWords: cfg.personaBannedWords,
+            perHour: cfg.commentPerHour,
+            perDay: cfg.commentPerDay,
+            dedupeHours: cfg.commentDedupeHours,
+          })
+          if (!gate.ok) return { ok: false, atSelected: false, posted: false, detail: '公开评论预检没过：' + gate.detail + '（' + gate.code + '）' }
+
           const atSec = readOwnerSecUid()
           const cargs = ['--aweme', aweme, '--text', text, '--mention-name', who]
           if (atSec) cargs.push('--mention-secuid', atSec)
@@ -1244,12 +1266,19 @@ export function apply(ctx, config) {
             const p = r.parsed || {}
             const cid = String(p.cid || '')
             const atOk = !!(p.mention && p.mention.uid && p.mention.sec)
+            let quotaNote = ''
+            if (cid) {
+              try {
+                const st = recordPublicComment({ aweme, target: who, text, cid })
+                quotaNote = `　本小时第 ${st.hour} 条 / 今天第 ${st.day} 条`
+              } catch { /* 记账失败不影响结果 */ }
+            }
             return {
               ok: !!p.ok && !!cid,
               atSelected: atOk,
               posted: !!cid,
               detail: cid
-                ? `评论已发布（cid=${cid}，${atOk ? '真 @' + p.mention.name : '@ 没成功，只有文字'}）`
+                ? `评论已发布（cid=${cid}，${atOk ? '真 @' + p.mention.name : '@ 没成功，只有文字'}）${quotaNote}`
                 : ((p && p.error) || (r.error && r.error.message) || '评论发送失败'),
             }
           } finally {
@@ -1289,6 +1318,18 @@ export function apply(ctx, config) {
           const aweme = awemeIdOf(url)
           if (!aweme) throw new Error('douyin_comment 需要有效的视频 url（含 /video/<id>）')
 
+          // 公开评论三道闸（2026-10-25 加）：长度 / 禁止词 / 站外引导 / 去重 / 频次。
+          //   全部在本地判，拦下来就**不发**，并把原因原样告诉调用方（别静默丢）。
+          const gate = checkPublicComment({
+            text, aweme, target: replyTo || '',
+            maxChars: cfg.commentMaxChars,
+            bannedWords: cfg.personaBannedWords,
+            perHour: cfg.commentPerHour,
+            perDay: cfg.commentPerDay,
+            dedupeHours: cfg.commentDedupeHours,
+          })
+          if (!gate.ok) return { ok: false, cid: '', detail: '公开评论预检没过：' + gate.detail + '（' + gate.code + '）' }
+
           // 走 comment-api.mjs（9334 Chrome 页面上下文 fetch，接口直发）
           const cargs = ['--aweme', aweme, '--text', text]
           if (replyTo) cargs.push('--reply', replyTo)
@@ -1296,12 +1337,20 @@ export function apply(ctx, config) {
           const p = r.parsed || {}
           const cid = String(p.cid || '')
           const ok = !!(p && p.ok) && !!cid
+          // 只有真拿到 cid 才记账（失败不该占额度）
+          let quotaNote = ''
+          if (ok && cid) {
+            try {
+              const st = recordPublicComment({ aweme, target: replyTo || '', text, cid })
+              quotaNote = `　本小时第 ${st.hour} 条 / 今天第 ${st.day} 条`
+            } catch { /* 记账失败不影响结果 */ }
+          }
           return {
             ok,
             cid,
             reply_to: replyTo || '',
             status_code: Number(p.status_code) || 0,
-            detail: ok ? (replyTo ? '已回评（cid=' + cid + '，挂到 ' + replyTo + ' 下）' : '已发（cid=' + cid + '）') : ((p.error) || '没拿到 cid'),
+            detail: ok ? ((replyTo ? '已回评（cid=' + cid + '，挂到 ' + replyTo + ' 下）' : '已发（cid=' + cid + '）') + quotaNote) : ((p.error) || '没拿到 cid'),
           }
           } finally { resumeWatcher() }
         },
@@ -1686,10 +1735,19 @@ export function apply(ctx, config) {
           // 短人设：一行，跟着唤醒提示走（固定几十字）；完整人设靠「注入一次」，不在这里拼
           const personaShort = String(cfg.personaShort || '').trim()
           const personaLine = personaShort ? `人设：${personaShort}\n` : ''
+          // 公开评论的专用语气（跟私信人设分开：评论区是公开的，不能叫"主人"、不能撒娇）
+          const personaPublic = String(cfg.personaPublic || '').trim()
+          const publicLine = personaPublic
+            ? `公开评论的语气（评论区长这样，别把私信里的称呼搬过去）：${personaPublic}\n`
+              + `公开评论还有三道闸：≤${Number(cfg.commentMaxChars) || 60} 字、`
+              + `不能出现「${String(cfg.personaBannedWords || '').split(/[,，、\s]+/).filter(Boolean).join('」「')}」、`
+              + `不能带网址/手机号/微信等站外引导；同一句 7 天内不能重发。\n`
+            : ''
           const prompt =
             `抖音有 ${theirs.length} 条新私信（来自「${cfg.peer}」）：\n${body}${more}\n` +
             cardLine + '\n' +
             personaLine +
+            publicLine +
             senderLine +
             replyModeLine +
             `\n🔴 红线：私密内容只能走 douyin_send（私信）；douyin_comment_at 是公开评论区，绝不把私聊内容放进去。主人让你去评论区时，先私信回一句「好，马上去看」，再去评论区回——两处都要回。`
