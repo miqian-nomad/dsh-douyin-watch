@@ -62,7 +62,8 @@ import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import { checkPublicComment, recordPublicComment, guardStats } from './lib/outbound-guard.mjs'
+import { checkPublicComment, recordPublicComment, guardStats, repliedTargets } from './lib/outbound-guard.mjs'
+import { pickReplyTargets, buildCommentPrompt } from './lib/notice-queue.mjs'
 
 // 插件自身目录（用于定位 tools/ 里的脚本，让包自包含、不依赖外部路径）
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -135,6 +136,14 @@ const DEFAULTS = {
   commentPerHour: 6,                 // 每小时最多几条（防批量刷评）
   commentPerDay: 30,                 // 每天最多几条
   commentDedupeHours: 168,           // 同一条评论多久内不许重发（默认 7 天）
+  // ── 评论区自动回复（可选，**默认关**）──
+  //   关了就是现在的行为：只在私信里被叫醒时，由 agent 决定要不要去评论区。
+  //   开了之后，每 commentScanMinutes 分钟看一眼互动通知（type 31/35/45/46），
+  //   把"还没回过、又不太旧"的挑出来叫醒 agent，由它逐条用 douyin_comment 回评。
+  commentAutoReply: false,
+  commentScanMinutes: 10,
+  commentMaxPerRound: 3,             // 一次最多丢几条给 agent（别一口气 20 条）
+  commentNoticeMaxAgeHours: 48,      // 超过这个时长的旧通知不再回（避免翻旧账）
   // ── 自动刷视频（每项都有独立开关）──
   autoScrollEnabled: false, // 总开关：关掉就完全不跑
   autoScrollWindows: ['12:00-14:00', '18:00-09:00'], // 自动跑的时间段，可增删
@@ -344,7 +353,7 @@ export function apply(ctx, config) {
   const toolDisposers = [] // 每个工具注册返回的卸载函数；插件卸载时一起清掉，避免热重载撞「already registered」
 
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
-  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaShort', 'personaFull', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
+  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaShort', 'personaFull', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -377,7 +386,7 @@ export function apply(ctx, config) {
             return j && j.mode === 'headed' ? 'headed' : 'headless'
           } catch { return 'headless' }
         }
-        const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; o.browserMode = browserModeNow(); const hm = (t) => (t ? new Date(t).toLocaleTimeString(undefined, { hour12: false }) : String()); o.status = { enabled: !!cfg.enabled, bound: watched.size, lastRead: hm(runtime.lastReadAt), lastCount: runtime.lastCount, lastFresh: runtime.lastFresh, lastWake: hm(runtime.lastWakeAt), lastError: runtime.lastError, line: '哨兵：' + (cfg.enabled ? '运行中' : '已停止') + (watched.size ? '（盯 ' + watched.size + ' 个会话）' : String()) + ' · 最后读取 ' + hm(runtime.lastReadAt) + '（' + runtime.lastCount + ' 条） · 最后唤醒 ' + (hm(runtime.lastWakeAt) || '无') + (cfg.enabled ? String() : ' · 已停靠页面，不再回执已读') + (runtime.lastError ? ' · 错误：' + runtime.lastError : String()) }; o.commentQuota = guardStats({ perHour: cfg.commentPerHour, perDay: cfg.commentPerDay }); return o }
+        const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; o.browserMode = browserModeNow(); const hm = (t) => (t ? new Date(t).toLocaleTimeString(undefined, { hour12: false }) : String()); o.status = { enabled: !!cfg.enabled, bound: watched.size, lastRead: hm(runtime.lastReadAt), lastCount: runtime.lastCount, lastFresh: runtime.lastFresh, lastWake: hm(runtime.lastWakeAt), lastError: runtime.lastError, line: '哨兵：' + (cfg.enabled ? '运行中' : '已停止') + (watched.size ? '（盯 ' + watched.size + ' 个会话）' : String()) + ' · 最后读取 ' + hm(runtime.lastReadAt) + '（' + runtime.lastCount + ' 条） · 最后唤醒 ' + (hm(runtime.lastWakeAt) || '无') + (cfg.enabled ? String() : ' · 已停靠页面，不再回执已读') + (runtime.lastError ? ' · 错误：' + runtime.lastError : String()) }; o.commentQuota = guardStats({ perHour: cfg.commentPerHour, perDay: cfg.commentPerDay }); o.commentScan = runtime.lastCommentScan || null; return o }
         const pathname = (req.url || '').split('?')[0]
         // GET /api/douyin-watch/sessions —— 给设置页的「钉死会话」选择器（只读）
         //   优先问 DSH 自己的会话服务（就是 GUI 会话列表那份数据）；拿不到再扫 ~/.dsh/sessions 目录。
@@ -599,6 +608,58 @@ export function apply(ctx, config) {
   }
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+  /**
+   * 评论区自动回复（可选，默认关）：读一次互动通知 → 挑出"还没回过、又不太旧"的 →
+   * 叫醒 agent，让它逐条用 douyin_comment（reply_to=cid）回评。
+   *
+   * 为什么挂在私信轮询里、而不是另起一个 timer：
+   *   同一个 9334 浏览器只能有一个循环在摸；复用私信那个循环最省事，也不会出现
+   *   "两个定时器同时读页面"的竞态。节流靠 commentScanMinutes（默认 10 分钟）。
+   */
+  async function maybeScanComments(agent) {
+    if (!cfg.commentAutoReply) return
+    const everyMs = Math.max(5, Number(cfg.commentScanMinutes) || 10) * 60e3
+    if (Date.now() - Number(runtime.lastCommentScanAt || 0) < everyMs) return
+    runtime.lastCommentScanAt = Date.now()
+    try {
+      const r = await runNode(cfg.noticeScript, [], 90000)
+      const p = r.parsed || {}
+      const items = Array.isArray(p.items) ? p.items : []
+      if (!items.length) { runtime.lastCommentScan = { at: Date.now(), items: 0, picked: 0 }; return }
+
+      const picked = pickReplyTargets(items, {
+        replied: repliedTargets(),
+        selfNick: String(cfg.owner || '').trim(),
+        maxAgeHours: Number(cfg.commentNoticeMaxAgeHours) || 48,
+        limit: Number(cfg.commentMaxPerRound) || 3,
+      })
+      runtime.lastCommentScan = { at: Date.now(), items: items.length, total: picked.total, picked: picked.targets.length }
+      if (!picked.targets.length) return
+
+      // 同一批别反复催：40 分钟内提醒过的 cid 不再重复投递
+      //   （agent 可能正在忙别的、或者它判断这条不该回；别每 10 分钟吵一次）
+      const now = Date.now()
+      const ann = runtime.announcedCids || (runtime.announcedCids = {})
+      const fresh = picked.targets.filter((t) => now - Number(ann[t.cid] || 0) > 40 * 60e3)
+      if (!fresh.length) { log('评论区待回的都刚提醒过，本轮跳过'); return }
+      for (const t of fresh) ann[t.cid] = now
+
+      log(`💬 评论区待回 ${fresh.length} 条（候选 ${picked.total}，跳过 ${picked.skipped.length}）`)
+      const route = sessionRoute(agent)
+      if (!route) { log('⚠️ 评论区唤醒跳过：解析不到模型路由'); return }
+      if (typeof agent.followup !== 'function') { log('⚠️ 评论区唤醒跳过：agent 没有 followup'); return }
+      agent.followup(makeUserMessage(buildCommentPrompt(fresh, {
+        maxChars: Number(cfg.commentMaxChars) || 60,
+        personaPublic: String(cfg.personaPublic || '').trim(),
+        maxAgeHours: Number(cfg.commentNoticeMaxAgeHours) || 48,
+      })))
+      runtime.lastCommentWakeAt = Date.now()
+      log('已投递评论区唤醒消息（followup）')
+    } catch (e) {
+      log('评论区扫描失败：' + ((e && e.message) || e))
+    }
+  }
 
   /** 轮询等一个「正被 GUI 创建、还没进 registry」的活 agent 出现；超时返回 null。 */
   async function waitForLiveAgent(sid, timeoutMs) {
@@ -1633,6 +1694,8 @@ export function apply(ctx, config) {
         if (busy) return
         busy = true
         try {
+          // 评论区自动回复（可选）：放在最前面，避免私信分支提前 return 时被跳过
+          await maybeScanComments(agent)
           try {
             const list = typeof ctx.agents?.list === 'function' ? ctx.agents.list() : null
             if (Array.isArray(list) && list.length && !list.includes(agent)) {

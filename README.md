@@ -170,6 +170,20 @@ await presets.mount(agentCtx, id)
 | 去重 | 同一句 7 天内不许重发 | 台账 `comment-ledger.jsonl`，key = 视频 + 对端 + 归一化文本 |
 | 频次 | 6 条/小时、30 条/天 | 防批量刷评；**只有真拿到 cid 才记账**，失败不占额度 |
 
+### 评论区自动回（可选，默认关）
+
+打开后挂在私信轮询里一起跑（不新增定时器，避免两个循环抢 9334 浏览器）：
+
+```
+每 commentScanMinutes（默认 10）分钟
+  → notice-read.mjs 读互动通知（type 31 回复你 / 35 评论你作品 / 45、46 @你）
+  → pickReplyTargets()：丢掉无 cid、自己发的、已回过（台账）、超时限（默认 48h）的
+  → 还有剩 → followup 叫醒 agent，把 cid + 链接 + 公开评论语气一起给它
+  → agent 逐条 douyin_comment({ reply_to }) 回评（过上面三道闸）
+```
+
+同一批 40 分钟内不重复催；`commentMaxPerRound`（默认 3）限制一次丢几条。
+
 ---
 
 ## 关键机制速查
