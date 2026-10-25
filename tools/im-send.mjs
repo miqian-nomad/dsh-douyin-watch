@@ -125,6 +125,26 @@ const hasEditor = async (ev) => await ev(`(function(){
 })()`)
 
 /**
+ * 在指定坐标处派发一轮鼠标事件（页面内派发）。
+ * ⚠️ 2026-10-25 实测：`Input.dispatchMouseEvent` 在这个 Chrome + 抖音页面上**点不动**会话行，
+ *    同一坐标改成页面内派发就立刻生效（chat-read-once.mjs 做过三组对照实验）。
+ *    这里统一走页面内派发，顺手把编辑框 focus 掉。
+ */
+const evClick = (ev, x, y) => ev(`(function(){
+  var cx = ${Number(x)}, cy = ${Number(y)};
+  var el = document.elementFromPoint(cx, cy);
+  if (!el) return 'no-element';
+  var opt = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 };
+  ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(t){
+    try { el.dispatchEvent(new (t.indexOf('pointer')===0?PointerEvent:MouseEvent)(t, opt)) } catch(e){}
+  });
+  try {
+    if (el.isContentEditable || el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') el.focus();
+  } catch(e){}
+  return 'ok:' + el.tagName + '.' + String(el.className || '').slice(0, 40);
+})()`)
+
+/**
  * 列出会话列表里的每一项：昵称（显示用）+ **sec_uid（稳定 id）** + 点击坐标。
  * ⚠️ sec_uid 从会话项的 React fiber 里读 `conversation.toParticipantSecUserId` ——
  *    昵称会重名，这个不会（2026-10-21 用户指出「光靠昵称不安全」后改的）。
@@ -222,11 +242,14 @@ async function openConversation(ev, send, who, whoId) {
     }
   }
   const b = hits[0]
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: b.x, y: b.y, button: 'none', buttons: 0 })
-  await sleep(80)
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: b.x, y: b.y, button: 'left', buttons: 1, clickCount: 1 })
-  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: b.x, y: b.y, button: 'left', buttons: 0, clickCount: 1 })
-  await sleep(2200)
+  // 页面内派发点击（原生 Input.dispatchMouseEvent 在这行上不生效，见 evClick 注释）
+  await evClick(ev, b.x, b.y)
+  // 会话打开后消息/编辑框要几秒才成批出现 —— 等编辑框真的在，别用固定 2.2s 赌
+  for (let i = 0; i < 24; i++) {
+    await sleep(500)
+    if (await hasEditor(ev)) break
+  }
+  await sleep(600)
   // 点完再核对一次：开着的是不是真的是他
   const after = String(await currentConvId(ev) || '')
   if (whoId && after && after !== whoId) {
@@ -338,27 +361,92 @@ async function main() {
     const beforeMsgs = await readMessages(c.ev)
     if (DRY) return out({ ok: true, sent: false, dry: true, to: target.nick, to_sec_uid: target.sec_uid || undefined, len: text.length, matched_by: TOID ? 'sec_uid' : 'nickname(唯一)', msgs_in_view: beforeMsgs.length, chrome: chromed })
 
-    // 点输入框
-    const pos = JSON.parse(await c.ev(`(function(){
-      var eds=Array.prototype.slice.call(document.querySelectorAll('[contenteditable="true"], textarea'));
-      for (var i=0;i<eds.length;i++){var e=eds[i];var r=e.getBoundingClientRect();if(r.width>80&&r.height>10)return JSON.stringify({x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)});}
-      return '{}';
+    // ① 点输入框并**确认拿到焦点**，顺手清掉上一次失败留下的残文
+    //    ⚠️ 2026-10-25 踩过的坑：编辑框里还留着上一轮没发出去的正文，
+    //       "框里有字"就被当成"这次输入成功"，于是 Enter 打进空气还报"已输入"。
+    //       现在先全选（后面 insertText 会整体替换），并要求 activeElement 真的是它。
+    const focus = JSON.parse(await c.ev(`(function(){
+      var eds = Array.prototype.slice.call(document.querySelectorAll('[contenteditable="true"], textarea'));
+      var ed = null;
+      for (var i = 0; i < eds.length; i++) { var rr = eds[i].getBoundingClientRect(); if (rr.width > 80 && rr.height > 10) { ed = eds[i]; break } }
+      if (!ed) return JSON.stringify({ ok: false, why: 'no-editor' });
+      var r = ed.getBoundingClientRect();
+      var cx = Math.round(r.x + r.width / 2), cy = Math.round(r.y + r.height / 2);
+      var el = document.elementFromPoint(cx, cy) || ed;
+      var opt = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 };
+      ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(t){
+        try { el.dispatchEvent(new (t.indexOf('pointer')===0?PointerEvent:MouseEvent)(t, opt)) } catch(e){}
+      });
+      try { ed.focus() } catch(e){}
+      var had = String(ed.innerText || ed.value || '').replace(/[\\u200b\\s]/g, '').length;
+      if (had) { try { document.execCommand('selectAll', false, null) } catch(e){} }
+      var a = document.activeElement;
+      return JSON.stringify({ ok: a === ed || ed.contains(a), had: had });
     })()`))
-    await c.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: pos.x, y: pos.y, button: 'left', clickCount: 1 })
-    await c.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: pos.x, y: pos.y, button: 'left', clickCount: 1 })
-    await sleep(400)
+    if (!focus.ok) return out({ ok: false, error: '输入框点不进去（没拿到焦点），这一条没发出去', inevitably: focus.why || undefined, chrome: chromed })
+    await sleep(200)
     await c.send('Input.insertText', { text })
     await sleep(800)
 
-    const typed = await c.ev(`(function(){
-      var e=document.querySelector('[contenteditable="true"], textarea');
-      return e ? String(e.innerText||e.value||'').replace(/[\\u200b\\r]/g,'') : '';
-    })()`)
-    if (!String(typed).trim()) return out({ ok: false, error: '正文没进输入框（可能被风控拦截）', chrome: chromed })
+    // ② 核对框里**真的是这一条**（不是旧文叠着），对不上就中止，绝不按 Enter
+    const typed = String(await c.ev(`(function(){
+      var e = document.querySelector('[contenteditable="true"], textarea');
+      return e ? String(e.innerText || e.value || '') : '';
+    })()`))
+    const normA = (s) => String(s || '').replace(/\u200b/g, '').replace(/\s+/g, ' ').trim()
+    if (normA(typed) !== normA(text)) {
+      return out({
+        ok: false,
+        error: '输入框里的正文和要发的不一致（旧残文没清掉，或没输进去），已中止不按回车',
+        want: normA(text).slice(0, 40),
+        got: normA(typed).slice(0, 40),
+        had_before: focus.had,
+        chrome: chromed,
+      })
+    }
 
-    await c.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 })
-    await c.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 })
-    await sleep(2600)
+    // ③ 发送：**在页面内派发 Enter**。
+    //    ⚠️ 2026-10-25 定位到的真凶：CDP 的 Input.dispatchKeyEvent（rawKeyDown 和
+    //       keyDown+text:'\r' 都试过）在这个 Chrome 上只会把输入框清空，**不会真的发出去** ——
+    //       所以 12:43 那三次"发了但回读不到"其实是根本没发，框里还叠了三份残文。
+    //       改成页面内 dispatchEvent(KeyboardEvent) 后一测就通（消息 sid 可回读）。
+    const enterRes = await c.ev(`(function(){
+      var e = document.querySelector('[contenteditable="true"], textarea');
+      if (!e) return 'no-editor';
+      var opt = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+      e.dispatchEvent(new KeyboardEvent('keydown', opt));
+      e.dispatchEvent(new KeyboardEvent('keyup', opt));
+      return 'ok';
+    })()`)
+    if (enterRes !== 'ok') return out({ ok: false, error: '找不到输入框，没能按回车', chrome: chromed })
+    await sleep(2500)
+
+    const leftLen = async () => Number(await c.ev(`(function(){
+      var e = document.querySelector('[contenteditable="true"], textarea');
+      return (e ? String(e.innerText || e.value || '') : '').replace(/[\\u200b\\s]/g, '').length;
+    })()`)) || 0
+    // ④ 回车没反应 → 兜底点「发送」按钮（同样是页面内派发）
+    if (await leftLen() > 0) {
+      await c.ev(`(function(){
+        var cands = Array.prototype.slice.call(document.querySelectorAll('button, [role="button"], div, span')).filter(function(el){
+          var t = (el.innerText || '').trim();
+          if (t !== '发送') return false;
+          var r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        });
+        if (!cands.length) return 'no-button';
+        var el = cands[0], r = el.getBoundingClientRect();
+        var cx = Math.round(r.x + r.width / 2), cy = Math.round(r.y + r.height / 2);
+        var t = document.elementFromPoint(cx, cy) || el;
+        var opt = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 };
+        ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(k){
+          try { t.dispatchEvent(new (k.indexOf('pointer')===0?PointerEvent:MouseEvent)(k, opt)) } catch(e){}
+        });
+        return 'clicked';
+      })()`)
+      await sleep(1600)
+    }
+    await sleep(1100)
 
     const bodyNow = await bodyText(c.ev)
     const leftInBox = await c.ev(`(function(){

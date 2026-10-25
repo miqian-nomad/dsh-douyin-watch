@@ -27,13 +27,14 @@ const FILE = String(argOf('--file', '')).trim()
 const TEXT = FILE ? readFileSync(FILE, 'utf8').trim() : String(argOf('--text', '')).trim()
 
 /**
- * 🔴 2026-10-22：这里以前**静默忽略** `--mention-*`（根本不读这几个参数）。
- *    调用方以为传了就能真 @，实际发出去的是普通评论：名字不变蓝、对方收不到通知，
- *    工具却报成功 —— 最坏的一种错（不是失败，是"看起来成功"）。
- *
- * ⭐ 但**这个脚本做不了真 @**（原因见 tools/comment-mention-ui.mjs 顶部：
- *    API 直发时服务端会把 mention 的 sec_uid 剥掉，只有前端点选才认）。
- *    ⇒ 现在选择**明确拒绝**，不再静默降级。要真 @ 请用 comment-mention-ui.mjs。
+ * ⭐ 2026-10-25 更新：**真 @ 现在能做了**。
+ *   之前这里写的是"API 直发会被服务端剥掉 sec_uid，只有前端点选才认" —— 那是缺 `user_id` 导致的。
+ *   当天在真机上抓到前端自己发的请求体，格式是（下面的昵称/ID 已打码）：
+ *     text         = "@某好友 测试"
+ *     text_extra   = [{"user_id":"1234567890123456","sec_uid":"MS4wLjABAAAA…","type":0,"start":0,"end":4}]
+ *   注意四个字段缺一不可：`user_id`（数字 uid，不是 sec_uid）+ `sec_uid` + `type:0` + `start/end`
+ *   （start/end 是**字符下标**，`end` 含头不含尾：`@某好友` = start 0 / end 4）。
+ *   所以这里不再拒绝，而是按这个格式发。uid 拿不到会自动去查（见下面 page 里的解析逻辑）。
  */
 const MENTION = {
   name: String(argOf('--mention-name', '')).trim(),
@@ -47,15 +48,8 @@ const out = (o) => { console.log(JSON.stringify(o, null, 1)); process.exitCode =
 if (!AWEME) { out({ ok: false, error: '缺 --aweme' }); process.exit(1) }
 if (!TEXT) { out({ ok: false, error: '正文是空的' }); process.exit(1) }
 if (TEXT.length > 500) { out({ ok: false, error: `正文太长（${TEXT.length} 字），抖音评论放不下` }); process.exit(1) }
-if (wantsMention) {
-  out({
-    ok: false,
-    unsupported: 'mention',
-    error: '这个脚本做不了真 @（API 直发会被服务端剥掉 sec_uid：名字变蓝但点开是空页、对方收不到通知）',
-    use_instead: 'tools/comment-mention-ui.mjs --aweme <id> --name <昵称> --text <正文>',
-    hint: '想发"@ 只是文字"的普通评论：去掉 --mention-* 三个参数再调',
-  })
-  process.exit(1)
+if (wantsMention && !MENTION.name && !MENTION.secUid && !MENTION.uid) {
+  out({ ok: false, error: '@ 谁没给（--mention-name 或 --mention-secuid）' }); process.exit(1)
 }
 
 async function cdpReady() {
@@ -143,13 +137,58 @@ try {
       os_name:'Windows', os_version:'10', platform:'PC'
     };
     function qs(d){ return Object.keys(d).map(function(k){return encodeURIComponent(k)+'='+encodeURIComponent(d[k]);}).join('&'); }
+    async function getJSON(path){
+      var r = await fetch(path, { credentials: 'include', headers: { 'Referer': 'https://www.douyin.com/' } });
+      var t = await r.text();
+      try { return { http: r.status, json: JSON.parse(t) } } catch (e) { return { http: r.status, json: null, head: t.slice(0, 160) } }
+    }
+    var o = { http: 0, cid: '', status_code: null, head: '', mention: null };
+
+    // ── ① 把要 @ 的人的 uid + sec_uid 凑齐（请求体里两个都要，缺一个服务端就把 mention 剥掉）
+    var AT = { name: ${JSON.stringify(MENTION.name)}, uid: ${JSON.stringify(MENTION.uid)}, sec: ${JSON.stringify(MENTION.secUid)} };
+    if (AT.name || AT.uid || AT.sec) {
+      if (!AT.uid || !AT.sec) {
+        if (AT.name) {   // 先在评论区里按昵称找（@ 评论过的人 / 作者最常见的场景）
+          var lr = await getJSON('/aweme/v1/web/comment/list/?' + qs(Object.assign({}, COMMON, { aweme_id: AWEME, cursor: '0', count: '50', item_type: '0' })));
+          var cs = (lr.json && lr.json.comments) || [];
+          for (var i = 0; i < cs.length; i++) {
+            var u = cs[i].user || {};
+            if (u.nickname !== AT.name) continue;
+            if (AT.sec && u.sec_uid && u.sec_uid !== AT.sec) continue;
+            AT.uid = String(u.uid || ''); AT.sec = String(u.sec_uid || '');
+            break;
+          }
+        }
+        if ((!AT.uid || !AT.sec) && AT.sec) {   // 评论区里没有 → 用 sec_uid 查主页补 uid
+          var pr = await getJSON('/aweme/v1/web/user/profile/other/?' + qs(Object.assign({}, COMMON, { sec_user_id: AT.sec })));
+          var pu = (pr.json && pr.json.user) || {};
+          if (pu.uid) { AT.uid = String(pu.uid); if (!AT.name && pu.nickname) AT.name = String(pu.nickname) }
+        }
+      }
+      if (!AT.uid || !AT.sec || !AT.name) {
+        o.error = 'mention_target_not_found';
+        o.mention = AT;
+        return JSON.stringify(o);
+      }
+      o.mention = AT;
+    }
+
+    // ── ② 拼 finalText + text_extra（start/end 是字符下标，end 含头不含尾）
+    var finalText = TEXT;
+    var extra = [];
+    if (AT.name && AT.uid && AT.sec) {
+      var lead = '@' + AT.name;
+      if (finalText.indexOf(lead) !== 0) finalText = lead + ' ' + finalText;
+      extra.push({ user_id: AT.uid, sec_uid: AT.sec, type: 0, start: 0, end: lead.length });
+    }
+    o.text = finalText;
+
     var url = '/aweme/v1/web/comment/publish/?' + qs(Object.assign({}, COMMON, { app_name:'aweme' }));
     var body = Object.assign({}, COMMON, {
-      aweme_id: AWEME, text: TEXT, text_extra: '[]',
+      aweme_id: AWEME, text: finalText, text_extra: JSON.stringify(extra),
       aweme_type: '0', channel_id: '0', city: '', sticker_id: '', is_fold: '0'
     });
     if (REPLY) { body.reply_id = REPLY; body.reply_to_reply_id = REPLY; }
-    var o = { http: 0, cid: '', status_code: null, head: '' };
     try {
       var r = await fetch(url, {
         method: 'POST', credentials: 'include',
@@ -178,6 +217,9 @@ try {
 
   const cid = String(res.cid || '')
   const ok = res.http === 200 && !!cid
+  const mentionNote = res.mention
+    ? (res.mention.uid && res.mention.sec ? `@${res.mention.name}(uid=${res.mention.uid})` : `@${res.mention.name || '?'}（没凑齐 uid/sec_uid）`)
+    : ''
 
   out({
     ok,
@@ -186,9 +228,15 @@ try {
     reply_to: REPLY || '(顶层评论)',
     aweme_id: AWEME,
     len: TEXT.length,
+    text_sent: res.text,
+    mention: res.mention || undefined,
+    mention_note: mentionNote || undefined,
     chrome: chromed,
     status_code: res.status_code === null ? undefined : res.status_code,
-    error: ok ? undefined : (res.error || `没拿到 cid（status_code=${res.status_code}）`),
+    error: ok ? undefined
+      : (res.error === 'mention_target_not_found'
+        ? `要 @ 的那个人没找到（评论区前 50 条里没有「${MENTION.name || MENTION.secUid}」；可显式传 --mention-uid 和 --mention-secuid）`
+        : (res.error || `没拿到 cid（status_code=${res.status_code}）`)),
     head: ok ? undefined : String(res.head || '').slice(0, 300),
   })
 } catch (e) {

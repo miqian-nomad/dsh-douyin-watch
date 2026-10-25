@@ -16,8 +16,10 @@
  *                 永远读到 0 条、永远静默返回空，看起来跟「没有新消息」一模一样。
  *
  * 输出一行 JSON：{ ok, messages: [{ own, text, img, sid, read, from }], url?, note? }
- *   note 非空 = 这轮没读到东西的**原因**（验证码中间页 / 需要登录 / 不在私信页），
- *   调用方要把它记进日志和设置页，别当成「没有新消息」。
+ *   note 非空 = 这轮没读到东西的**原因**（真被验证码拦 / 需要登录 / 不在私信页 /
+ *   会话点不开），调用方要把它记进日志和设置页，别当成「没有新消息」。
+ *   ⚠️ note 必须"只在真发生"时出现：2026-10-25 就是误报「验证码中间页」把用户骗去重新登录的。
+ *   ⚠️ 打开会话靠**页面内派发事件**（见 OPEN_PEER 的注释），原生鼠标事件在这行上不生效。
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -109,51 +111,128 @@ const READ_SCRIPT = `(function () {
   return JSON.stringify(out);
 })()`
 
-// 点开「peer」会话（会话列表左侧那一行），返回是否点开
-const openConversation = async (ev, send) => {
-  const found = await ev(`(function(){
-    var NICK = ${JSON.stringify(TO)}, SEC = ${JSON.stringify(TOID)};
-    var nodes = Array.prototype.slice.call(document.querySelectorAll('[data-e2e="conversation-item"]'));
-    for (var i = 0; i < nodes.length; i++) {
-      var n = nodes[i];
-      var fk = Object.keys(n).find(function(k){ return k.indexOf('__reactFiber$') === 0 });
-      var got = '';
-      if (fk) {
-        var f = n[fk], d = 0;
-        while (f && d < 14) {
-          var p = f.memoizedProps;
-          if (p && p.conversation && p.conversation.toParticipantSecUserId) { got = String(p.conversation.toParticipantSecUserId); break }
-          f = f.return; d++;
-        }
-      }
-      var txt = (n.innerText || '').replace(/\\s+/g, ' ').trim();
-      var hit = (SEC && got === SEC) || (!SEC && txt.indexOf(NICK) === 0);
-      if (!hit) continue;
-      var r = n.getBoundingClientRect();
-      return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
+// 右栏到底「点开没有」：只认**可见**的消息节点。
+// ⚠️ 2026-10-25 用户指出的关键事实：停在右栏那块底图（一个圆圈 logo）时，
+//    messageMessageBox 这些节点**依然挂在 DOM 里**，只是不可见 / 滚到视口外，
+//    所以"节点存在"不能当成"会话已打开"。用户实测：得点左边那行的头像或名字才会跳出来。
+const PANEL_STATE = `(function () {
+  var vis = 0, total = 0;
+  Array.prototype.forEach.call(document.querySelectorAll('[class*="messageMessageBox"]'), function (n) {
+    total++;
+    var r = n.getBoundingClientRect();
+    if (r.width > 10 && r.height > 10 && r.bottom > 0 && r.top < innerHeight) vis++;
+  });
+  var h = document.querySelector('[class*="RightPanelHeadertitle"]');
+  return JSON.stringify({ visible: vis, total: total, header: h ? String(h.innerText || '').trim() : '' });
+})()`
+
+// 点开「peer」会话：在页面内直接派发事件，别用坐标点击。
+// ⚠️ 2026-10-25 同一页面反复对照实验（每次先 Page.navigate 回到"底图"状态）：
+//   ① 什么都不点 → 右栏 20 秒也不会自己跳出来；
+//   ② Input.dispatchMouseEvent 点这行（昵称 / 头像 / 整行中心都试过）→ 右栏照样不动；
+//   ③ 页面内 dispatchEvent（同样坐标、同样的事件序列）→ 1 秒内就跳出来了。
+//   所以走页面内派发（React 不看 isTrusted），返回 'ok:<方式>' / 'none' / 'err'。
+const OPEN_PEER = (nick, sec) => `(function(){
+  var NICK = ${JSON.stringify(nick)}, SEC = ${JSON.stringify(sec)};
+  var secOf = function (n) {
+    var fk = Object.keys(n).find(function (k) { return k.indexOf('__reactFiber$') === 0 });
+    if (!fk) return '';
+    var f = n[fk], d = 0;
+    while (f && d < 14) {
+      var p = f.memoizedProps;
+      if (p && p.conversation && p.conversation.toParticipantSecUserId) return String(p.conversation.toParticipantSecUserId);
+      f = f.return; d++;
     }
     return '';
-  })()`)
-  if (!found) return false
-  const b = JSON.parse(found)
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: b.x, y: b.y, button: 'none', buttons: 0 })
-  await sleep(120)
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: b.x, y: b.y, button: 'left', buttons: 1, clickCount: 1 })
-  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: b.x, y: b.y, button: 'left', buttons: 0, clickCount: 1 })
-  await sleep(2200)
-  return true
+  };
+  var pick = null, how = '';
+  Array.prototype.forEach.call(document.querySelectorAll('[data-e2e="conversation-item"]'), function (n) {
+    if (pick) return;
+    var got = secOf(n);
+    var txt = (n.innerText || '').replace(/\\s+/g, ' ').trim();
+    var hit = (SEC && got === SEC) || (!SEC && NICK && txt.indexOf(NICK) === 0);
+    if (hit) { pick = n; how = 'item'; }
+  });
+  if (!pick && NICK) {          // 兜底：页面结构变了就按昵称文字找（限左栏）
+    Array.prototype.forEach.call(document.querySelectorAll('div,span,p'), function (el) {
+      if (pick || el.children.length) return;
+      if ((el.textContent || '').trim() !== NICK) return;
+      var r = el.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4 || r.left > 420) return;
+      pick = el; how = 'nick-leaf';
+    });
+  }
+  if (!pick) return 'none';
+  var r = pick.getBoundingClientRect();
+  var cx = Math.round(r.x + r.width / 2), cy = Math.round(r.y + r.height / 2);
+  var tgt = document.elementFromPoint(cx, cy) || pick;   // 点最上层子元素，事件冒泡回整行
+  var opt = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 };
+  ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (t) {
+    try {
+      tgt.dispatchEvent(new (t.indexOf('pointer') === 0 ? PointerEvent : MouseEvent)(t, opt));
+    } catch (e) {}
+  });
+  return 'ok:' + how;
+})()`
+
+/**
+ * 点开「peer」会话，返回是否真点开了（右栏出现可见消息）。
+ *   老版本固定 sleep 2200 就 return true —— 抖音有时不自动跳到聊天界面，
+ *   右栏停在底图，这一拍读到 0 条，看起来像"没有新消息"。
+ *   实测消息节点是**成批**出现的（0 条 → 33 条是一瞬间），所以给 12 秒等待窗口。
+ */
+const openConversation = async (ev, send) => {
+  const readPanel = async () => {
+    try { return JSON.parse(String(await ev(PANEL_STATE))) || {} } catch { return {} }
+  }
+  const waitOpen = async (ticks) => {                 // ticks × 500ms
+    for (let i = 0; i < ticks; i++) {
+      await sleep(500)
+      if (Number((await readPanel()).visible) > 0) return true
+    }
+    return false
+  }
+  if (Number((await readPanel()).visible) > 0) return true   // 已经打开了就别乱点
+  for (let round = 0; round < 3; round++) {
+    let res = 'err'
+    try { res = String(await ev(OPEN_PEER(TO, TOID))) } catch { res = 'err' }
+    if (process.env.DOUYIN_DEBUG) process.stderr.write(`[dbg] round${round} open=${res}\n`)
+    if (res.indexOf('ok') === 0) {
+      if (await waitOpen(24)) return true                // 等 12 秒看它跳没跳出来
+      return false                                       // 点了但没跳出来 → 交给外层报原因
+    }
+    await sleep(1500)                                    // 左栏还没渲染出来 → 等一拍再找
+  }
+  return false
 }
 
 // 页面现在到底是什么：私信页？验证码中间页？要登录？
+// ⚠️ 2026-10-25 踩过的坑（这条最坑，会造成"明明没拦也报验证码"）：
+//    抖音**常驻**一个 display:none / 0×0 的 rmc-nocaptcha iframe（没拦人也挂在 DOM 里），
+//    老代码 `!!querySelector(...)` 只看"存在" → 每一轮都判成「验证码中间页」，
+//    于是读 0 条时永远报错、设置页永远劝用户"去有头窗口过验证码"，
+//    用户看到的却是好端端的私信页 —— 看起来就像登录态掉了。
+//    现在只认"真可见"（面积够大 + 不是 none/hidden），标题变成验证码页也算。
+//    comment-api.mjs 早就是这个写法了，这里当时漏了。
 const PAGE_STATE = `(function () {
   var t = String(document.title || '');
   var body = (document.body && document.body.innerText) || '';
-  var vf = !!document.querySelector('iframe[src*="verifycenter"], iframe[src*="/captcha"], iframe[src*="verify.zijieapi"], #captcha_container, [class*="captcha"]');
-  var needsLogin = /扫码登录|验证码登录|密码登录|登录后查看|立即登录/.test(body.slice(0, 600));
+  var hasChat = !!document.querySelector('[class*="messageMessageBox"]');
+  var vis = false;
+  var frs = document.querySelectorAll('iframe[src*="verifycenter"], iframe[src*="/captcha"], iframe[src*="verify.zijieapi"], #captcha_container, [class*="captcha"]');
+  for (var i = 0; i < frs.length; i++) {
+    var el = frs[i], r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+    if (r.width > 40 && r.height > 40 && cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity || 1) > 0.05) { vis = true; break }
+  }
+  // 登录判断别拿正文硬匹配：聊天记录里出现"立即登录"这类字样会误报。
+  //   真登录弹窗时页面上没有消息节点，所以加一个 hasChat 保护。
+  var needsLogin = !hasChat && /扫码登录|验证码登录|密码登录|登录后查看|立即登录/.test(body.slice(0, 600));
   return JSON.stringify({
     href: String(location.href),
     title: t,
-    verify: vf || /验证码|安全验证|验证中/.test(t),
+    verify: vis || /验证码|安全验证|验证中/.test(t),
+    iframeVisible: vis,
+    hasChat: hasChat,
     needsLogin: needsLogin
   });
 })()`
@@ -177,7 +256,7 @@ const navToChat = async (c, maxSec = 20) => {
 
 /** 这轮没读到的原因（给日志/设置页看，别静默） */
 const whyStuck = (st, href) => {
-  if (st && st.verify) return '页面停在「验证码中间页」，需要人工在有头窗口里过验证码（切 --headless=off 让用户手动过）'
+  if (st && st.verify) return '页面停在「验证码中间页」，需要人工在有头窗口里过验证码（设置页 → 维护 →「切有头 + 触发验证」）'
   if (st && st.needsLogin) return '页面要求登录（登录态已失效），需要人工在有头窗口里登录一次'
   return `当前不在私信页（${(st && st.title) || ''} ${href || ''}）`.replace(/\s+/g, ' ').trim()
 }
@@ -203,15 +282,26 @@ try {
     throw { __done: true }
   }
   await sleep(1500)
-  await openConversation(c.ev, c.send)
-  const raw = await c.ev(READ_SCRIPT)
-  let list = []
-  try { list = JSON.parse(raw) || [] } catch { /* 页面没准备好 */ }
+  // 空读重试：会话面板（右侧消息、左侧列表）常常比页面本体晚好几拍才渲染好。
+  //   2026-10-25 实测：点开会话后消息节点要 ~6s 才成批出现；老版本一拍 0 条就下结论，
+  //   还配上误报的"验证码"，看起来像登录态掉了。
+  const readNow = async () => {
+    const raw = await c.ev(READ_SCRIPT)
+    try { return JSON.parse(raw) || [] } catch { return [] }   // 页面没准备好
+  }
+  const opened = await openConversation(c.ev, c.send)   // 里面已经把等待算好了
+  let list = await readNow()
+  if (!list.length && opened) {       // 面板确实开着、但这一拍没解析出来 → 再等一拍重读
+    await sleep(1500)
+    list = await readNow()
+  }
   let note = ''
   if (!list.length) {
-    // 一条都没有时多看一眼：可能验证码盖在 /chat 上也读不到（别报成「没有新消息」）
+    // 真的一条都没有 → 必须说清原因，别报成「没有新消息」（调用方会写日志+设置页）
     const st = await pageState(c)
-    if (st.verify) note = whyStuck(st, href)
+    if (st.verify || st.needsLogin) note = whyStuck(st, href)
+    else if (!opened) note = `没能打开「${TO || TOID || '对端'}」的会话（点昵称/头像都没跳出来：左栏没加载，或登录态已掉）`
+    else note = '会话面板里读不到消息（打开后重读两次都空），下一轮再试'
   }
   c.close()
   await sleep(200)

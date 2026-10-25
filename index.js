@@ -566,6 +566,16 @@ export function apply(ctx, config) {
     } catch (e) { log('保存已见消息失败：' + ((e && e.message) || e)) }
   }
 
+  /** 主人（被 @ 的那个人）的 sec_uid —— peer.json 里存着，用来把 uid 查出来。 */
+  function readOwnerSecUid() {
+    try {
+      const p = join(cfg.home || HOME, 'peer.json')
+      if (!existsSync(p)) return ''
+      const j = JSON.parse(readFileSync(p, 'utf8')) || {}
+      return String(j.sec_uid || '').trim()
+    } catch { return '' }
+  }
+
   function liveAgentOf(sid) {
     try {
       const list = typeof ctx.agents?.list === 'function' ? ctx.agents.list() : null
@@ -1129,10 +1139,11 @@ export function apply(ctx, config) {
 
       regTool(defineTool({
         name: 'douyin_comment_at',
-        description: '在指定抖音视频的评论区发一条评论，并用「真 @」提及主人（走选人列表，会触发对方通知）。🔴 公开可见：只能发本来就该公开的内容，绝不把私密对话内容放进来；私密回复走私信 douyin_send。',
+        description: '在指定抖音视频的评论区发一条评论，并用「真 @」提及主人（走评论接口 + text_extra，对方会收到通知）。🔴 公开可见：只能发本来就该公开的内容，绝不把私密对话内容放进来；私密回复走私信 douyin_send。',
         parameters: {
           text: { type: 'string', required: true, description: '评论正文（不含 @ 部分）' },
           url: { type: 'string', description: '视频链接；不传就用配置里的 commentUrl' },
+          name: { type: 'string', description: '@ 谁的昵称；不传就用配置里的 owner' },
         },
         output: {
           schema: {
@@ -1153,19 +1164,31 @@ export function apply(ctx, config) {
           const aweme = awemeIdOf(url)
           if (!aweme) throw new Error('douyin_comment_at 需要有效的视频 url（含 /video/<id>）')
 
-          // 走 comment-mention-ui.mjs（9334 Chrome 的 CDP 真 @ 流程）
+          // 2026-10-25 换路：@ 改走 comment-api（页面内 fetch + text_extra），不再点 UI。
+          //   为什么：comment-mention-ui.mjs 依赖"打 @ → 弹候选 → 点选"，
+          //   而这台机器上 CDP 按键进不了 Draft.js 编辑器、execCommand 塞进去又唤不出弹层
+          //   （五种方式全试过，页面里根本没有候选列表）—— 那条路是死的。
+          //   现在的做法是照抄前端抓到的请求体：
+          //     text = "@昵称 正文"，text_extra = [{user_id, sec_uid, type:0, start:0, end:昵称长度+1}]
+          //   2026-10-25 实测：服务端原样保留 text_extra，@ 是真 @。
+          const who = String((args && args.name) || cfg.owner || '').trim()
+          if (!who) throw new Error('douyin_comment_at 需要知道 @ 谁（配置里的 owner 为空时请传 name）')
+          const atSec = readOwnerSecUid()
+          const cargs = ['--aweme', aweme, '--text', text, '--mention-name', who]
+          if (atSec) cargs.push('--mention-secuid', atSec)
           pauseWatcher()
           try {
-            const r = await runNode(cfg.commentScript, ['--aweme', aweme, '--name', String(cfg.owner), '--text', text], 150000)
+            const r = await runNode(cfg.commentApiScript, cargs, 120000)
             const p = r.parsed || {}
-            const published = !!(p && p.published)
-            const refused = !!(p && p.refused)
-            const atSelected = published || refused || !!(p && p.popup_row)
+            const cid = String(p.cid || '')
+            const atOk = !!(p.mention && p.mention.uid && p.mention.sec)
             return {
-              ok: published,
-              atSelected,
-              posted: published,
-              detail: published ? `评论已发布（真 @${cfg.owner}）` : ((p && p.error) || (r.error && r.error.message) || '评论发送失败'),
+              ok: !!p.ok && !!cid,
+              atSelected: atOk,
+              posted: !!cid,
+              detail: cid
+                ? `评论已发布（cid=${cid}，${atOk ? '真 @' + p.mention.name : '@ 没成功，只有文字'}）`
+                : ((p && p.error) || (r.error && r.error.message) || '评论发送失败'),
             }
           } finally {
             resumeWatcher()
