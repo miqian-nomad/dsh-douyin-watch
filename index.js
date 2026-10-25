@@ -684,6 +684,17 @@ export function apply(ctx, config) {
         const works = Array.isArray((wr.parsed || {}).works) ? wr.parsed.works : []
         const author = (wr.parsed && wr.parsed.author) || {}
         if (author.nick) workSelfNick = String(author.nick)
+        // 顺手把"我全部作品"记下来：新发一条不用等通知，下一轮就会被扫到
+        const discovered = Array.isArray(wr.parsed && wr.parsed.discovered) ? wr.parsed.discovered.map(String) : []
+        if (discovered.length) {
+          const before = known.length
+          const merged = [...new Set([...known, ...discovered])]
+          if (merged.length !== before) {
+            known = merged
+            saveMyWorks(merged)
+            log(`记住我的作品 ${merged.length - before} 个（来自作品列表）`)
+          }
+        }
         let backfilled = 0
         for (const w of works) {
           for (const it of (w.items || [])) {
