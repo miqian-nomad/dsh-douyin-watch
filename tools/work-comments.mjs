@@ -139,17 +139,21 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
       };
     });
 
-    // ④ 每条都探子评论（并发 4）：既判"我回过没有"，也**顺手收下别人对我/别人的回复**
-    //   为什么要把子评论也收下来：碎片话（"OCR识字"「字幕怎么了」）单看根本不知道在接什么，
-    //   必须带上"它挂在谁下面 + 那条原文是什么"（2026-10-25 用户指出的上下文缺失）。
+    // ④ 每条顶层评论都探子评论（并发 4，翻页）
+    //   收两样东西：
+    //     ① 「我回过没有」——按 **reply_to_reply_id** 精确到具体那一条，而不是整条线程
+    //     ② 别人的回复（带真实父节点），用来还原抖音那样的**树**
+    //   ⚠️ 2026-10-25 调查结论（脚本实测）：接口每条回复都带
+    //        reply_id            = 根评论
+    //        reply_to_reply_id   = 它实际回复的那一条（0 表示直接回根）
+    //      所以层级要用 reply_to_reply_id 算，不能一律挂到顶层 —— 挂错就会像抖音上
+    //      "对，画面上的字也能认"那样，明明在潇下面，我们却记成挂在石桥伶麦下面。
     var idx = 0;
-    var replyItems = [];
+    var rawReplies = {};   // rootCid -> [reply...]
     async function worker(){
       while (idx < items.length) {
         var it = items[idx++];
         if (!it.cid) continue;
-        // 翻页取回复：抖音一页给不全（还有"回复的回复"），只取第一页会漏人
-        //   —— 2026-10-25 就因此误判"潇那条被吞了"，实际它挂在潇下面。
         var rcs = [], rcursor = 0, rpage = 0, rmore = true;
         while (rmore && rpage < 3) {
           var rr = await jget('/aweme/v1/web/comment/list/reply/?' + qs(Object.assign({}, COMMON, { item_id: aid, comment_id: it.cid, cursor: String(rcursor), count: '50', item_type: '0' })));
@@ -160,31 +164,7 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
           rpage++;
           if (rmore) await wait(250);
         }
-        for (var m = 0; m < rcs.length; m++) {
-          var ru = rcs[m].user || {};
-          var mine = authorUid && String(ru.uid || '') === authorUid;
-          if (mine) {
-            if (!it.answered_by_me) {
-              it.answered_by_me = true;
-              it.my_reply = String(rcs[m].text || '').slice(0, 200);
-              it.my_reply_cid = String(rcs[m].cid || '');
-              it.my_reply_time = Number(rcs[m].create_time || 0);
-            }
-            continue;
-          }
-          // 别人发的子回复 → 当候选，附带父评论信息
-          replyItems.push({
-            cid: String(rcs[m].cid || ''),
-            nick: String(ru.nickname || ''),
-            uid: String(ru.uid || ''),
-            text: String(rcs[m].text || '').replace(/\\s+/g, ' ').slice(0, 160),
-            time: Number(rcs[m].create_time || 0),
-            parent_cid: it.cid,
-            parent_nick: it.nick,
-            parent_text: it.text,
-            is_reply: true,
-          });
-        }
+        rawReplies[it.cid] = rcs;
         await wait(120);
       }
     }
@@ -192,8 +172,86 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
     for (var k = 0; k < POOL; k++) ws.push(worker());
     await Promise.all(ws);
 
+    // ⑤ 组装成树：先建 cid → 节点 的索引，再用 reply_to_reply_id 定父节点
+    var byCid = {};
+    items.forEach(function(it){ byCid[it.cid] = it; });
+    var replyItems = [];
+    Object.keys(rawReplies).forEach(function(rootCid){
+      rawReplies[rootCid].forEach(function(c){
+        var u = c.user || {};
+        var node = {
+          cid: String(c.cid || ''),
+          nick: String(u.nickname || ''),
+          uid: String(u.uid || ''),
+          text: String(c.text || '').replace(/\\s+/g, ' ').slice(0, 160),
+          time: Number(c.create_time || 0),
+          root_cid: rootCid,
+          reply_id: String(c.reply_id || rootCid),
+          reply_to_reply_id: String(c.reply_to_reply_id || ''),
+          is_reply: true,
+          answered_by_me: false,
+          my_reply: '', my_reply_cid: '', my_reply_time: 0,
+        };
+        if (node.cid) { byCid[node.cid] = node; replyItems.push(node); }
+      });
+    });
+
+    // 父节点：优先 reply_to_reply_id（且能在索引里找到），否则就是根
+    function parentOf(node) {
+      var p = node.reply_to_reply_id;
+      if (p && p !== '0' && p !== node.cid && byCid[p]) return p;
+      return node.reply_id || node.root_cid || '';
+    }
+    // 谁回过谁：只要某条回复的 parent 是它、且是作者发的
+    function markAnswered(nodes) {
+      nodes.forEach(function(n){
+        for (var i = 0; i < replyItems.length; i++) {
+          var r = replyItems[i];
+          if (!authorUid || r.uid !== authorUid) continue;
+          if (parentOf(r) === n.cid) {
+            n.answered_by_me = true;
+            n.my_reply = r.text.slice(0, 200);
+            n.my_reply_cid = r.cid;
+            n.my_reply_time = r.time;
+            break;
+          }
+        }
+      });
+    }
+    markAnswered(items);
+    markAnswered(replyItems);
+    // 每条回复补上对话上下文（父节点原文）
+    replyItems.forEach(function(r){
+      var p = byCid[parentOf(r)];
+      r.parent_cid = p ? p.cid : '';
+      r.parent_nick = p ? p.nick : '';
+      r.parent_text = p ? p.text : '';
+      // 它想回的那条在接口里根本看不到（比如机器人评论被折叠）→ 如实标出来
+      r.to_hidden = !!(r.reply_to_reply_id && r.reply_to_reply_id !== '0'
+        && r.reply_to_reply_id !== r.root_cid && !byCid[r.reply_to_reply_id]);
+      r.depth = (p && p.cid && p.cid !== r.root_cid) ? 2 : 1;
+    });
+
+    // ⑥ 树形视图（和抖音一致：顶层按时间，子回复按时间缩进）
+    var tree = [];
+    items.slice().sort(function(a,b){ return a.time - b.time }).forEach(function(t){
+      // 顶层用 answered（我回过没有），别用 mine —— 顶层是"我回过它"，不是"我发的"
+      tree.push({ depth: 0, cid: t.cid, nick: t.nick, text: t.text, answered: !!t.answered_by_me });
+      replyItems.filter(function(r){ return r.root_cid === t.cid })
+        .sort(function(a,b){ return a.time - b.time })
+        .forEach(function(r){
+          tree.push({
+            depth: r.depth, cid: r.cid, nick: r.nick, text: r.text,
+            mine: !!(authorUid && r.uid === authorUid),
+            to: r.parent_nick || '',
+            to_hidden: r.to_hidden || undefined,
+          });
+        });
+    });
+
     w.items = items;
     w.replies = replyItems;
+    w.tree = tree;
     res.works.push(w);
     await wait(300);
   }
