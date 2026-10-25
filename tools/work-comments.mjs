@@ -148,8 +148,18 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
       while (idx < items.length) {
         var it = items[idx++];
         if (!it.cid) continue;
-        var rr = await jget('/aweme/v1/web/comment/list/reply/?' + qs(Object.assign({}, COMMON, { item_id: aid, comment_id: it.cid, cursor: '0', count: '20', item_type: '0' })));
-        var rcs = (rr.comments || []);
+        // 翻页取回复：抖音一页给不全（还有"回复的回复"），只取第一页会漏人
+        //   —— 2026-10-25 就因此误判"潇那条被吞了"，实际它挂在潇下面。
+        var rcs = [], rcursor = 0, rpage = 0, rmore = true;
+        while (rmore && rpage < 3) {
+          var rr = await jget('/aweme/v1/web/comment/list/reply/?' + qs(Object.assign({}, COMMON, { item_id: aid, comment_id: it.cid, cursor: String(rcursor), count: '50', item_type: '0' })));
+          var pageR = (rr.comments || []);
+          rcs = rcs.concat(pageR);
+          rmore = Number((rr && rr.has_more) || 0) === 1 && pageR.length > 0;
+          rcursor = Number((rr && rr.cursor) || 0);
+          rpage++;
+          if (rmore) await wait(250);
+        }
         for (var m = 0; m < rcs.length; m++) {
           var ru = rcs[m].user || {};
           var mine = authorUid && String(ru.uid || '') === authorUid;

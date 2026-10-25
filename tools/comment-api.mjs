@@ -233,21 +233,34 @@ try {
       } catch (e2) { o.parse_error = String(e2 && e2.message || e2); }
     } catch (e) { o.error = String((e && e.message) || e); }
 
-    // ── 落点自检：拿到 cid 不等于真的挂上去了（2026-10-25 实测过"返回 cid 但查不到"）。
-    //    回评后隔一下再去子评论列表里找自己这条，找不到就如实报，别把假成功当成功。
+    // ── 落点自检：拿到 cid 之后去线程里找自己这条。
+    //   ⚠️ 2026-10-25 教训（用户手机截图打脸）：**"这一页没找到" ≠ "没发出去"**。
+    //     子评论接口一页只给一部分（还有更深层的"回复的回复"），当时用 count=50 一次就断言
+    //     "潇那条被吞了"，实际它好好地挂在潇下面。所以现在：翻页找 + 找不到只当**未知**，
+    //     绝不因此把一次成功的发送判成失败。
     if (REPLY && o.cid && !o.error) {
-      var landed = false, tries = 0, lastN = 0;
-      while (!landed && tries < 3) {
+      var landed = false, tries = 0, seenN = 0;
+      while (!landed && tries < 2) {
         if (tries > 0) await new Promise(function(r){ setTimeout(r, 900) });
-        var chk = await getJSON('/aweme/v1/web/comment/list/reply/?' + qs(Object.assign({}, COMMON, { item_id: AWEME, comment_id: REPLY, cursor: '0', count: '50', item_type: '0' })));
-        var lst = (chk.json && chk.json.comments) || [];
-        lastN = lst.length;
-        for (var q = 0; q < lst.length; q++) { if (String(lst[q].cid) === String(o.cid)) { landed = true; break } }
+        var cursor = 0, page = 0, acc = [];
+        while (page < 3) {
+          var chk = await getJSON('/aweme/v1/web/comment/list/reply/?' + qs(Object.assign({}, COMMON, { item_id: AWEME, comment_id: REPLY, cursor: String(cursor), count: '50', item_type: '0' })));
+          var lst = (chk.json && chk.json.comments) || [];
+          acc = acc.concat(lst);
+          var hm = Number(chk.json && chk.json.has_more) === 1 && lst.length > 0;
+          cursor = Number((chk.json && chk.json.cursor) || 0);
+          page++;
+          if (!hm || acc.length > 200) break;
+          await new Promise(function(r){ setTimeout(r, 300) });
+        }
+        seenN = acc.length;
+        for (var q = 0; q < acc.length; q++) { if (String(acc[q].cid) === String(o.cid)) { landed = true; break } }
         tries++;
       }
-      o.landed = landed;
-      o.thread_len = lastN;
-      if (!landed) o.land_note = '接口返回了 cid，但在「' + REPLY + '」的子评论列表里找不到这条（可能目标评论不可见/被折叠）';
+      o.landed = landed;              // true=确实看到了；false=翻了页也没看到（当"未知"，不当失败）
+      o.thread_len = seenN;
+      if (!landed) o.land_note = '接口返回了 cid，但把「' + REPLY + '」的回复翻了 3 页也没看到这条；'
+        + '可能它挂在更深一层、或目标评论不可见。想看真假请到手机/creator 后台翻一下。';
     }
     return JSON.stringify(o);
   })()`
@@ -291,9 +304,9 @@ try {
   }
 
   const cid = String(res.cid || '')
-  // 回评必须**确认落点**：拿到 cid 只说明接口收了，不代表挂上去了
+  // 落点只是"看到没看到"，**不是成败判据**：接口翻页看不到 ≠ 没发出去（已被用户截图纠正一次）
   const landed = res.landed === undefined ? null : !!res.landed
-  const ok = res.http === 200 && !!cid && (landed === false ? false : true)
+  const ok = res.http === 200 && !!cid
   const mentionNote = res.mention
     ? (res.mention.uid && res.mention.sec ? `@${res.mention.name}(uid=${res.mention.uid})` : `@${res.mention.name || '?'}（没凑齐 uid/sec_uid）`)
     : ''
@@ -314,11 +327,9 @@ try {
     chrome: chromed,
     status_code: res.status_code === null ? undefined : res.status_code,
     error: ok ? undefined
-      : (res.land_note
-        ? res.land_note
-        : (res.error === 'mention_target_not_found'
-          ? `要 @ 的那个人没找到（评论区前 50 条里没有「${MENTION.name || MENTION.secUid}」；可显式传 --mention-uid 和 --mention-secuid）`
-          : (res.error || `没拿到 cid（status_code=${res.status_code}）`))),
+      : (res.error === 'mention_target_not_found'
+        ? `要 @ 的那个人没找到（评论区前 50 条里没有「${MENTION.name || MENTION.secUid}」；可显式传 --mention-uid 和 --mention-secuid）`
+        : (res.error || `没拿到 cid（status_code=${res.status_code}）`)),
     head: ok ? undefined : String(res.head || '').slice(0, 300),
   })
 } catch (e) {

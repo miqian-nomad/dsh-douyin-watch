@@ -1654,7 +1654,7 @@ export function apply(ctx, config) {
             status_code: Number(p.status_code) || 0,
             detail: ok
               ? ((replyTo
-                ? `已回评（cid=${cid}，挂到 ${replyTo} 下${p.landed === false ? '，但落点没查到' : '，落点已核对'}）`
+                ? `已回评（cid=${cid}，挂到 ${replyTo} 下${p.landed === true ? '，落点已看到' : (p.landed === false ? '，落点这一页没看到（不等于没发出去）' : '')}）`
                 : `已发（cid=${cid}）`) + quotaNote)
               : ((p.error) || '没拿到 cid'),
           }
