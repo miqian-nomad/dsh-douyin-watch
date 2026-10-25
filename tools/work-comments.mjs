@@ -139,8 +139,11 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
       };
     });
 
-    // ④ 每条都探子评论（并发 4）—— 只看"有没有作者 uid 发的回复"
+    // ④ 每条都探子评论（并发 4）：既判"我回过没有"，也**顺手收下别人对我/别人的回复**
+    //   为什么要把子评论也收下来：碎片话（"OCR识字"「字幕怎么了」）单看根本不知道在接什么，
+    //   必须带上"它挂在谁下面 + 那条原文是什么"（2026-10-25 用户指出的上下文缺失）。
     var idx = 0;
+    var replyItems = [];
     async function worker(){
       while (idx < items.length) {
         var it = items[idx++];
@@ -149,13 +152,28 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
         var rcs = (rr.comments || []);
         for (var m = 0; m < rcs.length; m++) {
           var ru = rcs[m].user || {};
-          if (authorUid && String(ru.uid || '') === authorUid) {
-            it.answered_by_me = true;
-            it.my_reply = String(rcs[m].text || '').slice(0, 200);
-            it.my_reply_cid = String(rcs[m].cid || '');
-            it.my_reply_time = Number(rcs[m].create_time || 0);
-            break;
+          var mine = authorUid && String(ru.uid || '') === authorUid;
+          if (mine) {
+            if (!it.answered_by_me) {
+              it.answered_by_me = true;
+              it.my_reply = String(rcs[m].text || '').slice(0, 200);
+              it.my_reply_cid = String(rcs[m].cid || '');
+              it.my_reply_time = Number(rcs[m].create_time || 0);
+            }
+            continue;
           }
+          // 别人发的子回复 → 当候选，附带父评论信息
+          replyItems.push({
+            cid: String(rcs[m].cid || ''),
+            nick: String(ru.nickname || ''),
+            uid: String(ru.uid || ''),
+            text: String(rcs[m].text || '').replace(/\\s+/g, ' ').slice(0, 160),
+            time: Number(rcs[m].create_time || 0),
+            parent_cid: it.cid,
+            parent_nick: it.nick,
+            parent_text: it.text,
+            is_reply: true,
+          });
         }
         await wait(120);
       }
@@ -165,6 +183,7 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
     await Promise.all(ws);
 
     w.items = items;
+    w.replies = replyItems;
     res.works.push(w);
     await wait(300);
   }

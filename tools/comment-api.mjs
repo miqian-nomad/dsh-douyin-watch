@@ -23,6 +23,12 @@ const argOf = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? (argv[i + 1
 const DRY = argv.includes('--dry')
 const AWEME = String(argOf('--aweme', '')).trim()
 const REPLY = String(argOf('--reply', '')).trim()
+// 回「子评论」时必须分开传两个 id：
+//   reply_id            = 顶层评论（根）
+//   reply_to_reply_id   = 你要回的那条子评论
+// 2026-10-25 实测：两者都填子评论 cid 时接口照样返回 cid，但**服务端不落点**
+//   （潇那条"对，画面上的字也能认"就是这么消失的）。
+const REPLY_TO_REPLY = String(argOf('--reply-to-reply', '')).trim()
 const FILE = String(argOf('--file', '')).trim()
 const TEXT = FILE ? readFileSync(FILE, 'utf8').trim() : String(argOf('--text', '')).trim()
 
@@ -188,7 +194,11 @@ try {
       aweme_id: AWEME, text: finalText, text_extra: JSON.stringify(extra),
       aweme_type: '0', channel_id: '0', city: '', sticker_id: '', is_fold: '0'
     });
-    if (REPLY) { body.reply_id = REPLY; body.reply_to_reply_id = REPLY; }
+    if (REPLY) {
+      body.reply_id = REPLY
+      // 回子评论：reply_id 是根、reply_to_reply_id 才是那条子评论
+      body.reply_to_reply_id = REPLY_TO_REPLY || REPLY
+    }
     try {
       var r = await fetch(url, {
         method: 'POST', credentials: 'include',

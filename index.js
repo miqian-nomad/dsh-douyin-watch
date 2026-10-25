@@ -745,6 +745,16 @@ export function apply(ctx, config) {
               nickname: it.nick, content: it.text, create_time: it.time,
             })
           }
+          // 别人发的**子回复**也当候选：碎片话必须带父评论原文，否则不知道在接什么
+          for (const rp of (w.replies || [])) {
+            if (!rp.cid) continue
+            if (ledgerHasTarget(rp.cid)) continue
+            workItems.push({
+              type: 31, comment_id: rp.cid, aweme_id: String(w.aweme),
+              nickname: rp.nick, content: rp.text, create_time: rp.time,
+              parent_cid: rp.parent_cid, parent_nick: rp.parent_nick, parent_text: rp.parent_text,
+            })
+          }
         }
         if (backfilled) log(`台账补录 ${backfilled} 条（服务端确认我之前回过，来源不是本插件）`)
         if (tooOld.length) log(`跳过 ${tooOld.length} 个旧作品（超过 ${Number(cfg.commentWorkMaxAgeDays) || 0} 天不再自动回）：${tooOld.join('、')}`)
@@ -1569,6 +1579,7 @@ export function apply(ctx, config) {
           text: { type: 'string', required: true, description: '评论/回评正文（≤500 字，不 @ 人）' },
           url: { type: 'string', description: '视频链接；不传就用配置里的 commentUrl' },
           reply_to: { type: 'string', description: '要回复的那条评论的 cid；传了就发回评（挂到它下面），不传发顶层评论' },
+          reply_parent: { type: 'string', description: '当 reply_to 是「子评论」时，填它所属顶层评论的 cid。只填子评论 cid 时服务端可能不落点（假成功）' },
         },
         output: {
           schema: {
@@ -1583,6 +1594,10 @@ export function apply(ctx, config) {
           const text = String((args && args.text) || '').trim()
           if (!text) throw new Error('douyin_comment 需要非空 text')
           const replyTo = String((args && args.reply_to) || '').trim()
+          // 回「子评论」时要分清根和子：reply_parent = 那条顶层评论的 cid。
+          //   只传 reply_to（子评论 cid）时，接口照样回 cid 但服务端**不落点**
+          //   （2026-10-25 实测：潇那条回复就是这么"发成功却没出现"的）。
+          const replyParent = String((args && args.reply_parent) || '').trim()
           {
             const hits = guardOutbound(text)
             if (hits.length) return { ok: false, cid: '', detail: '内容命中敏感规则，已拒绝发送：' + hits.join('、') }
@@ -1606,7 +1621,14 @@ export function apply(ctx, config) {
 
           // 走 comment-api.mjs（9334 Chrome 页面上下文 fetch，接口直发）
           const cargs = ['--aweme', aweme, '--text', text]
-          if (replyTo) cargs.push('--reply', replyTo)
+          if (replyTo) {
+            // 回子评论：--reply 给根、--reply-to-reply 给子评论（两个都填同一个会被吞）
+            if (replyParent && replyParent !== replyTo) {
+              cargs.push('--reply', replyParent, '--reply-to-reply', replyTo)
+            } else {
+              cargs.push('--reply', replyTo)
+            }
+          }
           const r = await runNode(cfg.commentApiScript, cargs, 120000)
           const p = r.parsed || {}
           const cid = String(p.cid || '')
