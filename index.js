@@ -358,7 +358,14 @@ export function apply(ctx, config) {
           log(`拒绝配置写入（非本机）：remote=${ra || '?'}`)
           return sendJson(403, { ok: false, error: 'forbidden: 改设置必须在本机操作' })
         }
-        const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; const hm = (t) => (t ? new Date(t).toLocaleTimeString(undefined, { hour12: false }) : String()); o.status = { enabled: !!cfg.enabled, bound: watched.size, lastRead: hm(runtime.lastReadAt), lastCount: runtime.lastCount, lastFresh: runtime.lastFresh, lastWake: hm(runtime.lastWakeAt), lastError: runtime.lastError, line: '哨兵：' + (cfg.enabled ? '运行中' : '已停止') + (watched.size ? '（盯 ' + watched.size + ' 个会话）' : String()) + ' · 最后读取 ' + hm(runtime.lastReadAt) + '（' + runtime.lastCount + ' 条） · 最后唤醒 ' + (hm(runtime.lastWakeAt) || '无') + (cfg.enabled ? String() : ' · 已停靠页面，不再回执已读') + (runtime.lastError ? ' · 错误：' + runtime.lastError : String()) }; return o }
+        // 浏览器模式（无头/有头）落在 $HOME/browser-mode.json —— 单一来源，不用再进设置键
+        const browserModeNow = () => {
+          try {
+            const j = JSON.parse(readFileSync(join(cfg.home || HOME, 'browser-mode.json'), 'utf8'))
+            return j && j.mode === 'headed' ? 'headed' : 'headless'
+          } catch { return 'headless' }
+        }
+        const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; o.browserMode = browserModeNow(); const hm = (t) => (t ? new Date(t).toLocaleTimeString(undefined, { hour12: false }) : String()); o.status = { enabled: !!cfg.enabled, bound: watched.size, lastRead: hm(runtime.lastReadAt), lastCount: runtime.lastCount, lastFresh: runtime.lastFresh, lastWake: hm(runtime.lastWakeAt), lastError: runtime.lastError, line: '哨兵：' + (cfg.enabled ? '运行中' : '已停止') + (watched.size ? '（盯 ' + watched.size + ' 个会话）' : String()) + ' · 最后读取 ' + hm(runtime.lastReadAt) + '（' + runtime.lastCount + ' 条） · 最后唤醒 ' + (hm(runtime.lastWakeAt) || '无') + (cfg.enabled ? String() : ' · 已停靠页面，不再回执已读') + (runtime.lastError ? ' · 错误：' + runtime.lastError : String()) }; return o }
         const pathname = (req.url || '').split('?')[0]
         // GET /api/douyin-watch/sessions —— 给设置页的「钉死会话」选择器（只读）
         //   优先问 DSH 自己的会话服务（就是 GUI 会话列表那份数据）；拿不到再扫 ~/.dsh/sessions 目录。
@@ -437,6 +444,35 @@ export function apply(ctx, config) {
           } catch (e) {
             return sendJson(500, { ok: false, error: String((e && e.message) || e) })
           }
+        }
+        // POST /api/douyin-watch/browser-mode —— 切「无头 / 有头」，立刻重启浏览器
+        //   为什么会需要：抖音的滑块验证只有人能划。点「有头」→ 屏幕上出现窗口 → 你手动过 →
+        //   再点「无头」收回。模式写进 $HOME/browser-mode.json，以后自动拉起也照这个来。
+        if (req.method === 'POST' && pathname === '/api/douyin-watch/browser-mode') {
+          let body = {}
+          try {
+            const raw = await new Promise((r) => { let d = ''; req.on('data', (c) => { d += c }); req.on('end', () => r(d)) })
+            body = JSON.parse(raw || '{}')
+          } catch { /* 空 body */ }
+          const want = String(body.mode || '').trim()
+          if (want !== 'headed' && want !== 'headless') return sendJson(400, { ok: false, error: 'mode 必须是 headed 或 headless' })
+          pauseWatcher()
+          let r
+          try {
+            // 120 秒：关旧实例 + 起新实例 + 等 CDP
+            r = await runNode(join(HERE, 'tools', 'browser-mode.mjs'), ['--mode', want], 120000)
+          } finally {
+            resumeWatcher()
+          }
+          const p = r.parsed || {}
+          log('浏览器模式切换：' + (p.ok ? `${p.mode_before} → ${p.mode}（port=${p.port}）` : '失败 ' + (p.error || r.raw)))
+          return sendJson(200, {
+            ok: !!p.ok,
+            mode: p.mode || want,
+            port: Number(p.port) || 0,
+            note: p.note || '',
+            error: p.ok ? '' : String(p.error || '切换失败'),
+          })
         }
         // POST /api/douyin-watch/cleanup —— 清浏览器缓存（脚本里是白名单，绝不动 Cookies / Local Storage）
         if (req.method === 'POST' && pathname === '/api/douyin-watch/cleanup') {

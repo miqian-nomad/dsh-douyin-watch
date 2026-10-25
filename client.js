@@ -363,6 +363,26 @@ window.__ModuleLoader__.load({
           ),
         ),
         h(Card, { title: '维护' },
+          h(Row, { label: '浏览器模式', hint: '要过验证码就切「有头」——屏幕上会弹出窗口让你手动划；过完切回「无头」。切换会重启浏览器，几十秒' },
+            h('select', {
+              value: cfg.browserMode || 'headless',
+              onChange: (e) => {
+                const m = e.target.value
+                setNote(m === 'headed' ? '正在切到有头（重启浏览器，稍等）…' : '正在收回无头（重启浏览器）…')
+                fetch('/api/douyin-watch/browser-mode', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: m }) })
+                  .then((r) => r.json())
+                  .then((d) => setNote(d.ok
+                    ? ('已切到' + (d.mode === 'headed' ? '有头：窗口应该已经弹出来了，去划验证码' : '无头：收起来了') + (d.note ? '（' + d.note + '）' : ''))
+                    : ('切换失败：' + (d.error || '未知'))))
+                  .catch(() => setNote('切换失败：接口没返回'))
+                  .then(() => load())
+              },
+              style: Object.assign({}, ctlBase, { width: 132 }),
+            },
+              h('option', { value: 'headless' }, '无头（平时）'),
+              h('option', { value: 'headed' }, '有头（过验证）'),
+            ),
+          ),
           h(Row, { label: '清理浏览器缓存', hint: '只删 Cache / Code Cache 等可重建目录 + 7 天前的收件箱图片；Cookies 与本地存储一个字节不动' },
             h('button', {
               type: 'button',
