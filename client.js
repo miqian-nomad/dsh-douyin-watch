@@ -459,7 +459,8 @@ window.__ModuleLoader__.load({
             ? h('div', { style: { fontSize: 12, color: C.text3, paddingTop: 6 } },
                 '上次扫描：' + new Date(cfg.commentScan.at).toLocaleTimeString(undefined, { hour12: false }) +
                 ' · 待回 ' + (cfg.commentScan.picked || 0) + ' 条' +
-                (cfg.commentScan.works ? ' · 看了 ' + cfg.commentScan.works + ' 个作品' : ''))
+                (cfg.commentScan.works ? ' · 看了 ' + cfg.commentScan.works + ' 个作品' : '') +
+                (cfg.commentScan.added ? '（新记住 ' + cfg.commentScan.added + ' 个）' : ''))
             : null,
         ),
         h(Card, { title: '维护' },

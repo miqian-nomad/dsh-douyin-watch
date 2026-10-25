@@ -698,13 +698,15 @@ export function apply(ctx, config) {
         if (author.nick) workSelfNick = String(author.nick)
         // 顺手把"我全部作品"记下来：新发一条不用等通知，下一轮就会被扫到
         const discovered = Array.isArray(wr.parsed && wr.parsed.discovered) ? wr.parsed.discovered.map(String) : []
+        let addedWorks = 0
         if (discovered.length) {
           const before = known.length
           const merged = [...new Set([...known, ...discovered])]
           if (merged.length !== before) {
+            addedWorks = merged.length - before
             known = merged
             saveMyWorks(merged)
-            log(`记住我的作品 ${merged.length - before} 个（来自作品列表）`)
+            log(`记住我的作品 ${addedWorks} 个（来自作品列表）`)
           }
         }
         let backfilled = 0
@@ -744,7 +746,7 @@ export function apply(ctx, config) {
       //    （type 35/46 已经由评论列表覆盖了，这里只留 31/45 免得重复）
       const fromNotice = noticeItems.filter((it) => [31, 45].includes(Number(it.type)))
       const items = [...workItems, ...fromNotice]
-      if (!items.length) { runtime.lastCommentScan = { at: Date.now(), items: 0, works: workIds.length, picked: 0 }; return }
+      if (!items.length) { runtime.lastCommentScan = { at: Date.now(), items: 0, works: workIds.length, added: addedWorks, picked: 0 }; return }
 
       const picked = pickReplyTargets(items, {
         replied: repliedTargets(),
@@ -753,7 +755,7 @@ export function apply(ctx, config) {
         maxAgeHours: Number(cfg.commentNoticeMaxAgeHours) || 48,
         limit: Number(cfg.commentMaxPerRound) || 3,
       })
-      runtime.lastCommentScan = { at: Date.now(), items: items.length, works: workIds.length, total: picked.total, picked: picked.targets.length }
+      runtime.lastCommentScan = { at: Date.now(), items: items.length, works: workIds.length, added: addedWorks, total: picked.total, picked: picked.targets.length }
       if (!picked.targets.length) return
 
       // 同一批别反复催：40 分钟内提醒过的 cid 不再重复投递
