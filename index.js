@@ -1360,6 +1360,7 @@ export function apply(ctx, config) {
             properties: {
               ok: { type: 'boolean' }, aweme_id: { type: 'string' }, title: { type: 'string' },
               duration_s: { type: 'number' }, language: { type: 'string' },
+              no_speech: { type: 'boolean' },
               transcript: { type: 'string' }, contact_sheet: { type: 'string' },
               preview: { type: 'string' }, detail: { type: 'string' },
             },
@@ -1390,16 +1391,21 @@ export function apply(ctx, config) {
                 detail: (p.error || (r.error && r.error.message) || '分析失败') + (p.hint ? `（${p.hint}）` : ''),
               }
             }
+            const noSpeech = !!p.no_speech
             return {
               ok: true,
               aweme_id: p.aweme_id,
               title: p.title || '',
               duration_s: Number(p.duration_s) || undefined,
               language: p.language || '',
+              no_speech: noSpeech || undefined,
               transcript: p.transcript || '',
               contact_sheet: p.contact_sheet || '',
               preview: p.preview || '',
-              detail: `已分析 ${p.aweme_id}：${p.text_chars} 字文案 / ${p.frames} 帧；画面只读 ${p.contact_sheet}，正文读 ${p.transcript}`,
+              // 没人声 ≠ 失败：照样把帧和联系表给出去，让调用方改走画面路线
+              detail: noSpeech
+                ? `这条没有可转写的人声（大概只有 BGM / 表情字幕）：画面已抽 ${p.frames} 帧，看 ${p.contact_sheet}`
+                : `已分析 ${p.aweme_id}：${p.text_chars} 字文案 / ${p.frames} 帧；画面只读 ${p.contact_sheet}，正文读 ${p.transcript}`,
             }
           } finally {
             resumeWatcher()

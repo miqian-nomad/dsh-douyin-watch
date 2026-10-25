@@ -32,9 +32,10 @@ const AID = String(argOf('--aweme', '')).trim()
 const TIMEOUT = Math.max(8, Number(argOf('--timeout', '25')) || 25)
 const awemeOf = (s) => { const m = /\/video\/(\d{15,25})/.exec(String(s || '')); return m ? m[1] : '' }
 const AWEME = AID || awemeOf(LINK)
+const VIDEO_IN = String(argOf('--video', '')).trim()   // 本地文件入口（跳过取直链）
 const out = (o) => { console.log(JSON.stringify(o)); process.exitCode = o.ok ? 0 : 1 }
 
-if (!AWEME) { out({ ok: false, error: '缺 --aweme 或 --link（要含 /video/<id>）' }); process.exit(1) }
+if (!AWEME && !VIDEO_IN) { out({ ok: false, error: '缺 --aweme / --link（要含 /video/<id>）或 --video <本地文件>' }); process.exit(1) }
 
 const run = (cmd, args, timeoutMs) => new Promise((resolve) => {
   execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
@@ -86,18 +87,21 @@ const pickJSON = (s) => {
 try {
   const steps = {}
 
-  // ① 截媒体直链
-  const nodeBin = process.execPath
-  const mu = await run(nodeBin, [join(HERE, 'media-urls.mjs'), '--aweme', AWEME, '--timeout', String(TIMEOUT)], 90000)
-  const media = pickJSON(mu.stdout)
-  steps.media_urls = media ? { ok: !!media.ok, br: media.video_br, dur: media.dur_text } : { ok: false }
-  if (!media || !media.ok || !media.video) {
-    out({
-      ok: false, aweme_id: AWEME, steps,
-      error: (media && media.error) || mu.stderr.slice(-200) || '没截到媒体直链',
-      hint: '视频页可能没自动播放 / 被验证码拦住；先在有头窗口里把那条视频点开播放一下再重跑',
-    })
-    process.exit(1)
+  // ① 截媒体直链（本地文件不用）
+  let media = { ok: true, source: 'local_file' }
+  if (!VIDEO_IN) {
+    const nodeBin = process.execPath
+    const mu = await run(nodeBin, [join(HERE, 'media-urls.mjs'), '--aweme', AWEME, '--timeout', String(TIMEOUT)], 90000)
+    media = pickJSON(mu.stdout)
+    steps.media_urls = media ? { ok: !!media.ok, br: media.video_br, dur: media.dur_text } : { ok: false }
+    if (!media || !media.ok || !media.video) {
+      out({
+        ok: false, aweme_id: AWEME, steps,
+        error: (media && media.error) || mu.stderr.slice(-200) || '没截到媒体直链',
+        hint: '视频页可能没自动播放 / 被验证码拦住；先在有头窗口里把那条视频点开播放一下再重跑',
+      })
+      process.exit(1)
+    }
   }
 
   // ② 跑技能的下载+ASR+抽帧
@@ -107,29 +111,40 @@ try {
     process.exit(1)
   }
   const py = pythonBin()
-  const outDir = join(homeDir(), 'douyin_out', AWEME)
+  const outDir = join(homeDir(), 'douyin_out', VIDEO_IN ? 'local' : AWEME)
   const pageUrl = `https://www.douyin.com/video/${AWEME}`
-  const pargs = [
-    join(sd, 'scripts', 'douyin_downloader.py'),
-    '--link', pageUrl,
-    '--url', media.video,
-    ...(media.audio ? ['--audio-url', media.audio] : []),
-    '--out-dir', outDir,
-    '--json',
-  ]
+  const pargs = VIDEO_IN
+    ? [join(sd, 'scripts', 'douyin_downloader.py'), '--video', VIDEO_IN, '--out-dir', outDir, '--json']
+    : [
+      join(sd, 'scripts', 'douyin_downloader.py'),
+      '--link', pageUrl,
+      '--url', media.video,
+      ...(media.audio ? ['--audio-url', media.audio] : []),
+      '--out-dir', outDir,
+      '--json',
+    ]
   const pr = await run(py, pargs, 8 * 60 * 1000)
   const res = pickJSON(pr.stdout)
   steps.asr = res ? { ok: true, language: res.language, chars: String(res.text || '').length, frames: res.frame_count } : { ok: false }
-  if (!res || !res.text) {
+
+  // ⚠️ 2026-10-25 修：**「视频没人声」≠「ASR 出故障」**。
+  //   抖音上很多视频只有 BGM / 只有表情包字幕，whisper 转出来就是空字符串。
+  //   以前 `!res.text` 直接判失败 —— 结果① 语义错（把"没人说话"报成"ASR 没出结果"），
+  //   ② 已经抽好的帧和联系表全白扔（调用方拿不到 contact_sheet 路径）。
+  //   现在只要技能正常返回（res 存在），就算成功；正文为空只标 no_speech，
+  //   画面路线（联系表）照常可用。
+  if (!res) {
     out({
       ok: false, aweme_id: AWEME, steps,
-      error: (res && (res.error || res.hint)) || pr.stderr.slice(-260) || 'ASR 没出结果',
+      error: pr.stderr.slice(-260) || 'ASR 没出结果（技能没有返回可解析的 JSON）',
       exit: pr.err ? pr.err.code : undefined,
     })
     process.exit(1)
   }
 
   const text = String(res.text || '')
+  const frames = Number(res.frame_count) || 0
+  const noSpeech = text.trim().length === 0
   const transcript = res.transcript || join(outDir, 'transcript.md')
   const sheet = res.contact_sheet || join(outDir, 'contact_sheet.jpg')
   // 走 --url 显式入口时技能拿不到作品标题，会写成 direct_url/local_url；
@@ -150,6 +165,13 @@ try {
     transcript,
     contact_sheet: sheet,
     out_dir: res.out_dir || outDir,
+    // 没人声：别当成失败，但也别假装有文案 —— 明确标出来，让调用方改走画面路线
+    no_speech: noSpeech || undefined,
+    hint: noSpeech
+      ? (frames > 0
+        ? `没检测到人声（大概只有 BGM / 字幕表情），画面已抽成 ${frames} 帧：看 contact_sheet.jpg`
+        : '没检测到人声，而且这次也没抽到帧')
+      : undefined,
     // 只回前 160 字，正文让调用方读 transcript.md（省 token）
     preview: text.replace(/\s+/g, ' ').slice(0, 160),
     steps,

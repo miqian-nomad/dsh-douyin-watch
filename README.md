@@ -156,7 +156,7 @@ await presets.mount(agentCtx, id)
 | `douyin_notice_read` | 读互动通知（谁 @/评/赞/关注） | 只读，不标已读；type=31 是回评通知 |
 | `douyin_share` | 把视频以「分享卡片」发给主人 | 页面内 hover 分享面板 → 点好友；送达受风控影响 |
 | `douyin_pick` | 刷推荐流取候选视频 | 返回标题/热度/作者/时长/链接 |
-| `douyin_analyze` | 视频 → 文案 + 画面联系表 | 详情接口取直链 → faster-whisper 转写 + 抽帧；**收到分享卡片时自动跑**，不用主人开口 |
+| `douyin_analyze` | 视频 → 文案 + 画面联系表 | 详情接口取直链 → faster-whisper 转写 + 抽帧；**收到分享卡片时自动跑**；没人声时返回 `no_speech:true` 并照常给联系表；也支持 `--video <本地文件>` |
 
 ### 公开评论的三道闸（`lib/outbound-guard.mjs`）
 
