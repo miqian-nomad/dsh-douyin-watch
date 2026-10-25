@@ -123,31 +123,82 @@ const JS = (ids, max, probe) => `(async function(){
   return JSON.stringify(res);
 })()`
 
+/**
+ * 页面现在到底是什么状态？
+ * ⚠️ 2026-10-25 踩过的坑：抖音弹了验证码时页面根本没加载，接口 fetch 全部落空，
+ *    脚本只会"读半天没结果"，看起来像卡死 —— 于是有人去怀疑脚本请求量大、怀疑 about:blank。
+ *    其实**只要先看一眼页面状态就能立刻说清楚**。所以现在先探状态，被拦就立刻报错、不重试。
+ */
+const STATE_JS = `(function(){
+  var frs = document.querySelectorAll('iframe[src*="verifycenter"], iframe[src*="/captcha"], [class*="captcha"]');
+  var vis = false;
+  Array.prototype.forEach.call(frs, function(el){
+    var r = el.getBoundingClientRect();
+    if (r.width > 40 && r.height > 40) vis = true;
+  });
+  var t = String(document.title || '');
+  return JSON.stringify({
+    href: String(location.href),
+    title: t,
+    hasVideo: !!document.querySelector('video'),
+    verifyVisible: vis,
+    verify: vis || /验证码|安全验证|验证中|验证失败/.test(t),
+    blank: String(location.href) === 'about:blank'
+  });
+})()`
+
+const withTimeout = (p, ms, label) => Promise.race([
+  p,
+  new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' 超时 ' + Math.round(ms / 1000) + 's')), ms)),
+])
+
+const VERIFY_HINT = '抖音弹了验证码，页面根本没加载，所以读不到评论。'
+  + '去有头窗口里把滑块划一次（设置页 → 维护 →「切有头 + 触发验证」），过了再重跑。'
+
 let done = false
-for (let attempt = 1; attempt <= 6 && !done; attempt++) {
+for (let attempt = 1; attempt <= 3 && !done; attempt++) {
+  let c
   try {
-    const c = await openPage()
-    try {
-      const href = String(await c.ev('location.href'))
-      if (!href.includes('douyin.com')) {
-        await c.send('Page.navigate', { url: 'https://www.douyin.com/' })
-        await sleep(6000)
-      }
-      const raw = await c.ev(JS(AWEMES, MAX, PROBE))
-      const parsed = JSON.parse(String(raw)) || {}
-      const now = Math.floor(Date.now() / 1000)
-      for (const w of parsed.works || []) {
-        for (const it of w.items || []) {
-          if (it.time > 0 && (now - it.time) / 3600 > MAX_AGE_H) it.stale = true
-        }
-      }
-      out({ ...parsed, chrome: c.status })
+    c = await openPage()
+    // ① 先看状态：被验证码拦住就**立刻**报错，别傻等、别重试
+    let st = {}
+    try { st = JSON.parse(String(await withTimeout(c.ev(STATE_JS), 15000, '探页面状态'))) || {} } catch { st = {} }
+
+    if (st.blank) {
+      await c.send('Page.navigate', { url: 'https://www.douyin.com/' })
+      await sleep(6000)
+      try { st = JSON.parse(String(await withTimeout(c.ev(STATE_JS), 15000, '探页面状态'))) || {} } catch { st = {} }
+    }
+    if (st.verify) {
+      out({
+        ok: false, code: 'verify_required',
+        error: VERIFY_HINT,
+        page: { href: st.href, title: st.title, verify_visible: st.verifyVisible },
+      })
       done = true
-    } finally { try { c.close() } catch { /* ignore */ } }
+      continue
+    }
+    if (!String(st.href || '').includes('douyin.com')) {
+      await c.send('Page.navigate', { url: 'https://www.douyin.com/' })
+      await sleep(6000)
+    }
+
+    // ② 真正读数据（整体加超时：页面被别的进程导航走时 ev 可能永远不返回）
+    const raw = await withTimeout(c.ev(JS(AWEMES, MAX, PROBE)), 60000, '读评论')
+    const parsed = JSON.parse(String(raw)) || {}
+    const now = Math.floor(Date.now() / 1000)
+    for (const w of parsed.works || []) {
+      for (const it of w.items || []) {
+        if (it.time > 0 && (now - it.time) / 3600 > MAX_AGE_H) it.stale = true
+      }
+    }
+    out({ ...parsed, chrome: c.status })
+    done = true
   } catch (e) {
-    // 页面可能被哨兵/别的会话正在导航 —— 等一下重试，别把临时冲突当失败
-    if (attempt === 6) out({ ok: false, error: '读评论失败（重试 6 次）：' + ((e && e.message) || e) })
+    // CDP 层面的临时冲突（页面正被导航）重试几次；其它错误直接抛真相
+    const msg = String((e && e.message) || e)
+    if (attempt === 3) out({ ok: false, error: '读评论失败（试了 3 次）：' + msg })
     else await sleep(2000)
-  }
+  } finally { try { c && c.close() } catch { /* ignore */ } }
 }
 if (!done) process.exitCode = 1

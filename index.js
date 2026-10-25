@@ -673,7 +673,14 @@ export function apply(ctx, config) {
       const workIds = known.slice(0, 3) // 一次最多看 3 个作品，别把页面读爆
       if (workIds.length) {
         const perWork = Math.max(10, (Number(cfg.commentMaxPerRound) || 3) * 4)
-        const wr = await runNode(cfg.workCommentsScript, ['--aweme', workIds.join(','), '--max', String(perWork)], 120000)
+        const wr = await runNode(cfg.workCommentsScript, ['--aweme', workIds.join(','), '--max', String(perWork)], 150000)
+        // 页面被验证码拦住时：**如实说是验证码**，别当成"没有待回评论"
+        //   （2026-10-25：抖音弹验证码后页面根本没加载，读半天没结果，看起来像脚本卡死）
+        if (wr.parsed && wr.parsed.code === 'verify_required') {
+          runtime.lastError = '评论区扫描被验证码拦住：' + (wr.parsed.error || '需要人工过滑块')
+          log('⚠️ 评论区扫描跳过：页面被验证码拦住（去有头窗口过一下滑块，设置页 → 维护 →「切有头 + 触发验证」）')
+          return
+        }
         const works = Array.isArray((wr.parsed || {}).works) ? wr.parsed.works : []
         const author = (wr.parsed && wr.parsed.author) || {}
         if (author.nick) workSelfNick = String(author.nick)
