@@ -62,7 +62,7 @@ import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import { checkPublicComment, recordPublicComment, guardStats, repliedTargets, ledgerHasTarget } from './lib/outbound-guard.mjs'
+import { checkPublicComment, recordPublicComment, guardStats, repliedTargets, ledgerHasTarget, setGuardHome } from './lib/outbound-guard.mjs'
 import { pickReplyTargets, buildCommentPrompt } from './lib/notice-queue.mjs'
 
 // 插件自身目录（用于定位 tools/ 里的脚本，让包自包含、不依赖外部路径）
@@ -333,6 +333,12 @@ export function apply(ctx, config) {
     }
   } catch { /* 读不到就按默认 */ }
   const cfg = { ...DEFAULTS, ...fileCfg, ...boot, cfgFile: cfgPath }
+  // ⚠️ 2026-10-25 修的坑：子进程跑脚本时会带 `DOUYIN_HOME = cfg.home`，
+  //    但**插件自己进程内**调 lib/（outbound-guard 写台账）走的是 `homeDir()` →
+  //    只看 process.env.DOUYIN_HOME，没设就回落到 ~/.dsh/douyin-duty。
+  //    结果：脚本写 D:\douyin-duty，台账写 ~/.dsh/douyin-duty —— 两个家目录分裂。
+  //    这里显式把同一个家目录告诉 lib，别让它们各算各的。
+  setGuardHome(cfg.home || HOME)
   const log = (m) => {
     try { appendFileSync(cfg.logFile, `[${new Date().toISOString()}] ${m}\n`) } catch { /* 日志写不进去不影响主流程 */ }
   }
