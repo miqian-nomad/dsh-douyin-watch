@@ -144,18 +144,19 @@ await presets.mount(agentCtx, id)
 
 ---
 
-## 8 个工具
+## 9 个工具
 
 | 工具 | 作用 | 关键点 |
 |---|---|---|
-| `douyin_read` | 读「<对端>」会话最近消息（带 sid + 已读） | 只读 |
+| `douyin_read` | 读「<对端>」会话最近消息（带 sid + 已读 + 卡片 itemId） | 只读 |
 | `douyin_send` | 发一条文字私信 + 回读校验 | `delivered` 来自真回读（「我发的」消息里多出这条）；`read` 恒 false（页面读不到已读）。短消息（≤10 字）通过率高 |
 | `douyin_comment` | 发顶层评论，或**回评**（传 `reply_to`） | 接口直发，不 @ 人，不弹验证 |
-| `douyin_comment_at` | 发评论并**真 @** 主人（UI 点选） | 必须 CDP 键盘事件（见上第 4 条） |
+| `douyin_comment_at` | 发评论并**真 @** 主人（`text_extra` 接口直发） | 需要 `user_id + sec_uid + type:0 + start/end` 四件套，缺一个服务端就把 @ 剥掉 |
 | `douyin_comment_delete` | 删自己发的评论 | 服务端校验是否本人 |
 | `douyin_notice_read` | 读互动通知（谁 @/评/赞/关注） | 只读，不标已读；type=31 是回评通知 |
-| `douyin_share` | 把视频以「分享卡片」发给主人 | hover 分享面板 → 点好友；送达受风控影响 |
+| `douyin_share` | 把视频以「分享卡片」发给主人 | 页面内 hover 分享面板 → 点好友；送达受风控影响 |
 | `douyin_pick` | 刷推荐流取候选视频 | 返回标题/热度/作者/时长/链接 |
+| `douyin_analyze` | 视频 → 文案 + 画面联系表 | 详情接口取直链 → faster-whisper 转写 + 抽帧；**收到分享卡片时自动跑**，不用主人开口 |
 
 ---
 
@@ -262,7 +263,7 @@ notice_list_v2[].comment.comment = {
 
 ## 文件
 
-- `index.js` —— 插件本体（watcher + 10 个工具）
+- `index.js` —— 插件本体（watcher + 9 个工具）
 - `cordis.patch.yml` —— 挂载声明（bundle patch）
 - `locale/*.json`、`icon.svg` —— 插件列表里的中文名/描述/图标
 - `tools/*.mjs` —— 10 个动作脚本（纯 Node，无 Python 依赖）
