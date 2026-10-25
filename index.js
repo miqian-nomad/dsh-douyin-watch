@@ -62,7 +62,7 @@ import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import { checkPublicComment, recordPublicComment, guardStats, repliedTargets } from './lib/outbound-guard.mjs'
+import { checkPublicComment, recordPublicComment, guardStats, repliedTargets, ledgerHasTarget } from './lib/outbound-guard.mjs'
 import { pickReplyTargets, buildCommentPrompt } from './lib/notice-queue.mjs'
 
 // 插件自身目录（用于定位 tools/ 里的脚本，让包自包含、不依赖外部路径）
@@ -669,21 +669,41 @@ export function apply(ctx, config) {
       //    2026-10-25 用户指出：自己的视频下要能"批量回"，所以这里直接读评论列表，
       //    不再依赖"有没有推通知"。
       let workItems = []
+      let workSelfNick = ''            // 自己作品的作者昵称（= 本账号），用来排掉"我自己发的评论"
       const workIds = known.slice(0, 3) // 一次最多看 3 个作品，别把页面读爆
       if (workIds.length) {
         const perWork = Math.max(10, (Number(cfg.commentMaxPerRound) || 3) * 4)
         const wr = await runNode(cfg.workCommentsScript, ['--aweme', workIds.join(','), '--max', String(perWork)], 120000)
         const works = Array.isArray((wr.parsed || {}).works) ? wr.parsed.works : []
+        const author = (wr.parsed && wr.parsed.author) || {}
+        if (author.nick) workSelfNick = String(author.nick)
+        let backfilled = 0
         for (const w of works) {
           for (const it of (w.items || [])) {
-            if (it.answered) continue                       // 服务端说下面已经有回复
             if (!it.cid) continue
+            // ⭐ 服务端说这条下面有「我」的回复 ⇒ 补录进台账（这就是"台本"）
+            //   为什么补：回复可能是 creator 后台 / 别的会话 / 手机发的，台账根本没见过；
+            //   不补的话，下一个会话还是"不知道自己刚回了什么"，只能重新爬。
+            if (it.answered_by_me && !ledgerHasTarget(it.cid)) {
+              try {
+                recordPublicComment({
+                  aweme: String(w.aweme), target: it.cid,
+                  text: String(it.my_reply || '(服务端确认已回复)'),
+                  cid: String(it.my_reply_cid || ''),
+                  at: Number(it.my_reply_time) ? Number(it.my_reply_time) * 1000 : Date.now(),
+                  source: 'server',
+                })
+                backfilled++
+              } catch { /* 补录失败不影响本轮 */ }
+            }
+            if (it.answered_by_me) continue                 // 我已经回过 → 不是待回
             workItems.push({
               type: 35, comment_id: it.cid, aweme_id: String(w.aweme),
               nickname: it.nick, content: it.text, create_time: it.time,
             })
           }
         }
+        if (backfilled) log(`台账补录 ${backfilled} 条（服务端确认我之前回过，来源不是本插件）`)
         if (wr.parsed && wr.parsed.error) log('读作品评论失败：' + wr.parsed.error)
       }
 
@@ -695,7 +715,8 @@ export function apply(ctx, config) {
 
       const picked = pickReplyTargets(items, {
         replied: repliedTargets(),
-        selfNick: String(cfg.owner || '').trim(),
+        // 自己作品下的"我"就是这个账号本身，不是私信对端 —— 否则会把我的评论当成待回
+        selfNick: workSelfNick || String(cfg.owner || '').trim(),
         maxAgeHours: Number(cfg.commentNoticeMaxAgeHours) || 48,
         limit: Number(cfg.commentMaxPerRound) || 3,
       })
@@ -1355,7 +1376,8 @@ export function apply(ctx, config) {
                   type: 'object', additionalProperties: false,
                   properties: {
                     aweme: { type: 'string' }, cid: { type: 'string' }, nick: { type: 'string' },
-                    text: { type: 'string' }, answered: { type: 'boolean' }, stale: { type: 'boolean' },
+                    text: { type: 'string' }, stale: { type: 'boolean' },
+                    answered_by_me: { type: 'boolean' }, my_reply: { type: 'string' }, self: { type: 'boolean' },
                   },
                 },
               },
@@ -1371,19 +1393,25 @@ export function apply(ctx, config) {
           const max = Math.max(1, Number((args && args.max) || 20))
           pauseWatcher()
           try {
-            const r = await runNode(cfg.workCommentsScript, ['--aweme', ids.slice(0, 3).join(','), '--max', String(max)], 120000)
+            const r = await runNode(cfg.workCommentsScript, ['--aweme', ids.slice(0, 3).join(','), '--max', String(max)], 180000)
             const p = r.parsed || {}
             if (!p.ok) return { ok: false, items: [], detail: (p.error || (r.error && r.error.message) || '读评论失败') }
+            const selfNick = String((p.author && p.author.nick) || '')
             const items = []
             for (const w of (p.works || [])) {
               for (const it of (w.items || [])) {
-                items.push({ aweme: String(w.aweme), cid: it.cid, nick: it.nick, text: it.text, answered: !!it.answered, stale: !!it.stale })
+                items.push({
+                  aweme: String(w.aweme), cid: it.cid, nick: it.nick, text: it.text,
+                  answered_by_me: !!it.answered_by_me, my_reply: it.my_reply || '',
+                  self: !!selfNick && it.nick === selfNick, stale: !!it.stale,
+                })
               }
             }
-            const open = items.filter((x) => !x.answered).length
+            const open = items.filter((x) => !x.answered_by_me && !x.self)
             return {
               ok: true, total: items.length, items,
-              detail: `读到 ${items.length} 条评论，其中 ${open} 条还没有回复（作品 ${ids.slice(0, 3).join('、')}）`,
+              detail: `读到 ${items.length} 条评论：我回过 ${items.filter((x) => x.answered_by_me).length} 条，`
+                + `还没回 ${open.length} 条` + (selfNick ? `（账号：${selfNick}）` : ''),
             }
           } finally {
             resumeWatcher()
