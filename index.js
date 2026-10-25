@@ -148,6 +148,11 @@ const DEFAULTS = {
   //   为什么要有：老视频的评论往往几个月后又冒出来，逐条回会变成"翻旧账"，
   //   而且读者也早就不在了。2026-10-25 用户提的需求。
   commentWorkMaxAgeDays: 7,
+  // 不回的账号（昵称命中就跳过）：机器人 / 平台客服号，回它们既没意义，
+  //   而且它们的评论常被折叠 —— 发了服务端也查不到（豆包那种，2026-10-25 实测三次都是假成功）。
+  commentSkipNicks: '豆包',
+  // 只有 @ 没有内容的评论不硬回（回"在呢"就是客服腔）
+  commentSkipPureMention: true,
   // 自己作品下的评论：以**评论列表**为准（通知会延迟、有条数上限）。
   // 这里可填作品链接/id（逗号分隔）；不填也行 —— 通知里 type=35/46 的作品会被自动记住。
   myWorks: '',
@@ -368,7 +373,7 @@ export function apply(ctx, config) {
   const toolDisposers = [] // 每个工具注册返回的卸载函数；插件卸载时一起清掉，避免热重载撞「already registered」
 
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
-  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaShort', 'personaFull', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
+  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaShort', 'personaFull', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -680,6 +685,7 @@ export function apply(ctx, config) {
       //    不再依赖"有没有推通知"。
       let workItems = []
       let workSelfNick = ''            // 自己作品的作者昵称（= 本账号），用来排掉"我自己发的评论"
+      const unreachable = new Set()    // 发了但服务端看不见的线程（机器人/平台提示类评论）
       const workIds = known.slice(0, 3) // 一次最多看 3 个作品，别把页面读爆
       if (workIds.length) {
         const perWork = Math.max(10, (Number(cfg.commentMaxPerRound) || 3) * 4)
@@ -731,6 +737,9 @@ export function apply(ctx, config) {
               } catch { /* 补录失败不影响本轮 */ }
             }
             if (it.answered_by_me) continue                 // 我已经回过 → 不是待回
+            // ⚠️ 台账里发过、服务端却说这条下面没有我的回复 ⇒ 这条线程对公开接口不可见
+            //    （典型是平台/机器人账号的提示类评论被折叠）。别再试第二次，试了也是自我安慰。
+            if (ledgerHasTarget(it.cid)) { unreachable.add(it.cid); continue }
             workItems.push({
               type: 35, comment_id: it.cid, aweme_id: String(w.aweme),
               nickname: it.nick, content: it.text, create_time: it.time,
@@ -749,12 +758,19 @@ export function apply(ctx, config) {
       if (!items.length) { runtime.lastCommentScan = { at: Date.now(), items: 0, works: workIds.length, added: addedWorks, picked: 0 }; return }
 
       const picked = pickReplyTargets(items, {
-        replied: repliedTargets(),
+        // unreachable 要先从 replied 里摘出去，否则会先命中"已经回过了"、看不到真正原因
+        replied: new Set([...repliedTargets()].filter((c) => !unreachable.has(c))),
+        unreachable,
         // 自己作品下的"我"就是这个账号本身，不是私信对端 —— 否则会把我的评论当成待回
         selfNick: workSelfNick || String(cfg.owner || '').trim(),
         maxAgeHours: Number(cfg.commentNoticeMaxAgeHours) || 48,
         limit: Number(cfg.commentMaxPerRound) || 3,
+        skipNicks: String(cfg.commentSkipNicks || ''),
+        skipPureMention: cfg.commentSkipPureMention !== false,
       })
+      if (unreachable.size) {
+        log(`${unreachable.size} 条线程「发了但服务端查不到」（对公开接口不可见，已跳过、不再重试）：${[...unreachable].slice(0, 3).join('、')}`)
+      }
       runtime.lastCommentScan = { at: Date.now(), items: items.length, works: workIds.length, added: addedWorks, total: picked.total, picked: picked.targets.length }
       if (!picked.targets.length) return
 

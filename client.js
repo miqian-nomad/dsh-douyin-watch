@@ -447,6 +447,17 @@ window.__ModuleLoader__.load({
               style: Object.assign({}, ctlBase, { width: 100 }),
             }),
           ),
+          h(Row, { label: '这些账号不回', hint: '逗号分隔；机器人/平台客服号。它们的评论常被折叠 —— 回了服务端也查不到（假成功）' },
+            h('input', {
+              value: cfg.commentSkipNicks || '',
+              onChange: (e) => save({ commentSkipNicks: e.target.value }),
+              placeholder: '豆包',
+              style: Object.assign({}, ctlBase, { width: 240 }),
+            }),
+          ),
+          h(Row, { label: '只有 @ 的不回', hint: '比如「@本鲸不胖」这种没有可接内容的：回"在呢"就像客服机器人' },
+            h(Switch, { checked: cfg.commentSkipPureMention !== false, onChange: (v) => save({ commentSkipPureMention: v }) }),
+          ),
           h(Row, { label: '我的作品', hint: '作品链接或 id，逗号分隔。填了才"按评论列表批量看自己视频下的评论"；不填也会自动记住（收到作品评论通知时）' },
             h('input', {
               value: cfg.myWorks || '',
