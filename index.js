@@ -144,6 +144,9 @@ const DEFAULTS = {
   commentScanMinutes: 10,
   commentMaxPerRound: 3,             // 一次最多丢几条给 agent（别一口气 20 条）
   commentNoticeMaxAgeHours: 48,      // 超过这个时长的旧通知不再回（避免翻旧账）
+  // 自己作品下的评论：以**评论列表**为准（通知会延迟、有条数上限）。
+  // 这里可填作品链接/id（逗号分隔）；不填也行 —— 通知里 type=35/46 的作品会被自动记住。
+  myWorks: '',
   // ── 自动刷视频（每项都有独立开关）──
   autoScrollEnabled: false, // 总开关：关掉就完全不跑
   autoScrollWindows: ['12:00-14:00', '18:00-09:00'], // 自动跑的时间段，可增删
@@ -177,6 +180,8 @@ const DEFAULTS = {
   noticeScript: join(HERE, 'tools', 'notice-read.mjs'),
   // 视频分析：截媒体直链（9334 已登录浏览器）→ 技能做下载/ASR/抽帧
   analyzeScript: join(HERE, 'tools', 'analyze-video.mjs'),
+  // 自己作品下的评论：读评论列表（批量回复用；通知只补 type=31 那种"别人回了我评论"）
+  workCommentsScript: join(HERE, 'tools', 'work-comments.mjs'),
 }
 
 const norm = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase()
@@ -353,7 +358,7 @@ export function apply(ctx, config) {
   const toolDisposers = [] // 每个工具注册返回的卸载函数；插件卸载时一起清掉，避免热重载撞「already registered」
 
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
-  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaShort', 'personaFull', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
+  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaShort', 'personaFull', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -607,6 +612,26 @@ export function apply(ctx, config) {
     return null
   }
 
+  // ── 「我的作品」清单（评论区自动回要按作品读评论列表）──────────────────────
+  //   两个来源：① 设置页 myWorks 里手填的链接/id；② 通知里 type=35/46 的作品自动记住。
+  //   记住的那份落盘，重启不丢。
+  const myWorksFile = () => join(cfg.home || HOME, 'my-works.json')
+  function loadMyWorks() {
+    try {
+      const j = JSON.parse(readFileSync(myWorksFile(), 'utf8'))
+      return Array.isArray(j.ids) ? j.ids.map(String).filter(Boolean) : []
+    } catch { return [] }
+  }
+  function saveMyWorks(ids) {
+    try {
+      writeFileSync(myWorksFile(), JSON.stringify({ ids: [...new Set(ids)].slice(-50), at: new Date().toISOString() }, null, 2))
+    } catch { /* 写不进去不影响主流程 */ }
+  }
+  function myWorkIds() {
+    const fromCfg = String(cfg.myWorks || '').split(/[,，\s]+/).map(awemeIdOf).filter(Boolean)
+    return [...new Set([...fromCfg, ...loadMyWorks()])]
+  }
+
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
   /**
@@ -623,10 +648,50 @@ export function apply(ctx, config) {
     if (Date.now() - Number(runtime.lastCommentScanAt || 0) < everyMs) return
     runtime.lastCommentScanAt = Date.now()
     try {
-      const r = await runNode(cfg.noticeScript, [], 90000)
-      const p = r.parsed || {}
-      const items = Array.isArray(p.items) ? p.items : []
-      if (!items.length) { runtime.lastCommentScan = { at: Date.now(), items: 0, picked: 0 }; return }
+      // ① 通知：只用来补「别人回复了我的评论」（type 31）＋ 顺手记住哪些作品是我的（35/46）
+      let noticeItems = []
+      try {
+        const nr = await runNode(cfg.noticeScript, [], 90000)
+        noticeItems = Array.isArray((nr.parsed || {}).items) ? nr.parsed.items : []
+      } catch (e) { log('读通知失败（不影响评论列表那条路）：' + ((e && e.message) || e)) }
+
+      let known = myWorkIds()
+      const learned = noticeItems
+        .filter((it) => (Number(it.type) === 35 || Number(it.type) === 46) && String(it.aweme_id || '').length >= 15)
+        .map((it) => String(it.aweme_id))
+      if (learned.length) {
+        const before = known.length
+        known = [...new Set([...known, ...learned])]
+        if (known.length !== before) { saveMyWorks(known); log('记住我的作品 ' + (known.length - before) + ' 个（来自通知）') }
+      }
+
+      // ② 自己作品下的评论：**以评论列表为准**（通知会延迟、有条数上限）
+      //    2026-10-25 用户指出：自己的视频下要能"批量回"，所以这里直接读评论列表，
+      //    不再依赖"有没有推通知"。
+      let workItems = []
+      const workIds = known.slice(0, 3) // 一次最多看 3 个作品，别把页面读爆
+      if (workIds.length) {
+        const perWork = Math.max(10, (Number(cfg.commentMaxPerRound) || 3) * 4)
+        const wr = await runNode(cfg.workCommentsScript, ['--aweme', workIds.join(','), '--max', String(perWork)], 120000)
+        const works = Array.isArray((wr.parsed || {}).works) ? wr.parsed.works : []
+        for (const w of works) {
+          for (const it of (w.items || [])) {
+            if (it.answered) continue                       // 服务端说下面已经有回复
+            if (!it.cid) continue
+            workItems.push({
+              type: 35, comment_id: it.cid, aweme_id: String(w.aweme),
+              nickname: it.nick, content: it.text, create_time: it.time,
+            })
+          }
+        }
+        if (wr.parsed && wr.parsed.error) log('读作品评论失败：' + wr.parsed.error)
+      }
+
+      // ③ 合并：自己作品下的评论 + 通知里「别人回复我评论」的那类
+      //    （type 35/46 已经由评论列表覆盖了，这里只留 31/45 免得重复）
+      const fromNotice = noticeItems.filter((it) => [31, 45].includes(Number(it.type)))
+      const items = [...workItems, ...fromNotice]
+      if (!items.length) { runtime.lastCommentScan = { at: Date.now(), items: 0, works: workIds.length, picked: 0 }; return }
 
       const picked = pickReplyTargets(items, {
         replied: repliedTargets(),
@@ -634,7 +699,7 @@ export function apply(ctx, config) {
         maxAgeHours: Number(cfg.commentNoticeMaxAgeHours) || 48,
         limit: Number(cfg.commentMaxPerRound) || 3,
       })
-      runtime.lastCommentScan = { at: Date.now(), items: items.length, total: picked.total, picked: picked.targets.length }
+      runtime.lastCommentScan = { at: Date.now(), items: items.length, works: workIds.length, total: picked.total, picked: picked.targets.length }
       if (!picked.targets.length) return
 
       // 同一批别反复催：40 分钟内提醒过的 cid 不再重复投递
@@ -1263,6 +1328,62 @@ export function apply(ctx, config) {
               contact_sheet: p.contact_sheet || '',
               preview: p.preview || '',
               detail: `已分析 ${p.aweme_id}：${p.text_chars} 字文案 / ${p.frames} 帧；画面只读 ${p.contact_sheet}，正文读 ${p.transcript}`,
+            }
+          } finally {
+            resumeWatcher()
+          }
+        },
+      }))
+
+      regTool(defineTool({
+        name: 'douyin_work_comments',
+        description: '读「自己作品」下的评论列表（只读），用来批量回复：返回每条评论的 cid / 昵称 / 正文 / 时间 / 是否已有回复。要回哪条就调 douyin_comment 并传 reply_to=<cid>。不传 url 就用设置里「我的作品」或通知里学到的作品（最多 3 个）。',
+        parameters: {
+          url: { type: 'string', description: '作品链接或 id（可逗号分隔多个）；不传就用配置里记着的作品' },
+          max: { type: 'integer', description: '每个作品读多少条，默认 20' },
+        },
+        output: {
+          schema: {
+            type: 'object', additionalProperties: false,
+            required: ['ok', 'items'],
+            properties: {
+              ok: { type: 'boolean' },
+              total: { type: 'integer' },
+              items: {
+                type: 'array',
+                items: {
+                  type: 'object', additionalProperties: false,
+                  properties: {
+                    aweme: { type: 'string' }, cid: { type: 'string' }, nick: { type: 'string' },
+                    text: { type: 'string' }, answered: { type: 'boolean' }, stale: { type: 'boolean' },
+                  },
+                },
+              },
+              detail: { type: 'string' },
+            },
+          },
+          render: (_args, value) => TEXT(value.detail || ('读到 ' + (value.items || []).length + ' 条评论')),
+        },
+        async execute(args) {
+          const raw = String((args && args.url) || cfg.myWorks || '').split(/[,，\s]+/).map(awemeIdOf).filter(Boolean)
+          const ids = raw.length ? raw : myWorkIds()
+          if (!ids.length) return { ok: false, items: [], detail: '还不知道你的作品是哪些：在设置页填「我的作品」，或者等一条作品评论通知（会自动记住）' }
+          const max = Math.max(1, Number((args && args.max) || 20))
+          pauseWatcher()
+          try {
+            const r = await runNode(cfg.workCommentsScript, ['--aweme', ids.slice(0, 3).join(','), '--max', String(max)], 120000)
+            const p = r.parsed || {}
+            if (!p.ok) return { ok: false, items: [], detail: (p.error || (r.error && r.error.message) || '读评论失败') }
+            const items = []
+            for (const w of (p.works || [])) {
+              for (const it of (w.items || [])) {
+                items.push({ aweme: String(w.aweme), cid: it.cid, nick: it.nick, text: it.text, answered: !!it.answered, stale: !!it.stale })
+              }
+            }
+            const open = items.filter((x) => !x.answered).length
+            return {
+              ok: true, total: items.length, items,
+              detail: `读到 ${items.length} 条评论，其中 ${open} 条还没有回复（作品 ${ids.slice(0, 3).join('、')}）`,
             }
           } finally {
             resumeWatcher()

@@ -176,13 +176,19 @@ await presets.mount(agentCtx, id)
 
 ```
 每 commentScanMinutes（默认 10）分钟
-  → notice-read.mjs 读互动通知（type 31 回复你 / 35 评论你作品 / 45、46 @你）
+  ├─ 自己作品下的评论：**读评论列表**（tools/work-comments.mjs）
+  │    /aweme/v1/web/comment/list/ 拿 cid/昵称/正文/时间/是否已有回复
+  │    —— 以它为准，不靠通知（通知会延迟、有条数上限）
+  └─ 通知：只补「别人回复了我的评论」（type 31）+ @你（45）
+       顺带把 type 35/46 的作品 id 记进 my-works.json（下次直接读评论列表）
   → pickReplyTargets()：丢掉无 cid、自己发的、已回过（台账）、超时限（默认 48h）的
   → 还有剩 → followup 叫醒 agent，把 cid + 链接 + 公开评论语气一起给它
   → agent 逐条 douyin_comment({ reply_to }) 回评（过上面三道闸）
 ```
 
 同一批 40 分钟内不重复催；`commentMaxPerRound`（默认 3）限制一次丢几条。
+
+也可以随时手动批量看：工具 `douyin_work_comments`（只读，返回每条评论的 cid 和"是否已回"）。
 
 ---
 

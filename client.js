@@ -439,10 +439,19 @@ window.__ModuleLoader__.load({
               style: Object.assign({}, ctlBase, { width: 100 }),
             }),
           ),
+          h(Row, { label: '我的作品', hint: '作品链接或 id，逗号分隔。填了才"按评论列表批量看自己视频下的评论"；不填也会自动记住（收到作品评论通知时）' },
+            h('input', {
+              value: cfg.myWorks || '',
+              onChange: (e) => save({ myWorks: e.target.value }),
+              placeholder: 'https://www.douyin.com/video/7700523174529600831',
+              style: Object.assign({}, ctlBase, { width: 380 }),
+            }),
+          ),
           cfg.commentScan
             ? h('div', { style: { fontSize: 12, color: C.text3, paddingTop: 6 } },
                 '上次扫描：' + new Date(cfg.commentScan.at).toLocaleTimeString(undefined, { hour12: false }) +
-                ' · 通知 ' + (cfg.commentScan.items || 0) + ' 条 · 待回 ' + (cfg.commentScan.picked || 0) + ' 条')
+                ' · 待回 ' + (cfg.commentScan.picked || 0) + ' 条' +
+                (cfg.commentScan.works ? ' · 看了 ' + cfg.commentScan.works + ' 个作品' : ''))
             : null,
         ),
         h(Card, { title: '维护' },
