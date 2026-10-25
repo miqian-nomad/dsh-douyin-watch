@@ -144,6 +144,10 @@ const DEFAULTS = {
   commentScanMinutes: 10,
   commentMaxPerRound: 3,             // 一次最多丢几条给 agent（别一口气 20 条）
   commentNoticeMaxAgeHours: 48,      // 超过这个时长的旧通知不再回（避免翻旧账）
+  // 作品发布超过这么多天，就**整条作品的评论都不再自动回**（0 = 不限）。
+  //   为什么要有：老视频的评论往往几个月后又冒出来，逐条回会变成"翻旧账"，
+  //   而且读者也早就不在了。2026-10-25 用户提的需求。
+  commentWorkMaxAgeDays: 7,
   // 自己作品下的评论：以**评论列表**为准（通知会延迟、有条数上限）。
   // 这里可填作品链接/id（逗号分隔）；不填也行 —— 通知里 type=35/46 的作品会被自动记住。
   myWorks: '',
@@ -358,7 +362,7 @@ export function apply(ctx, config) {
   const toolDisposers = [] // 每个工具注册返回的卸载函数；插件卸载时一起清掉，避免热重载撞「already registered」
 
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
-  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaShort', 'personaFull', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
+  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaShort', 'personaFull', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -673,7 +677,9 @@ export function apply(ctx, config) {
       const workIds = known.slice(0, 3) // 一次最多看 3 个作品，别把页面读爆
       if (workIds.length) {
         const perWork = Math.max(10, (Number(cfg.commentMaxPerRound) || 3) * 4)
-        const wr = await runNode(cfg.workCommentsScript, ['--aweme', workIds.join(','), '--max', String(perWork)], 150000)
+        // 作品发布超过 N 天的整条跳过（0 = 不限）：别去翻几个月前的旧账
+        const workAgeArgs = ['--max-work-age-days', String(Number(cfg.commentWorkMaxAgeDays) || 0)]
+        const wr = await runNode(cfg.workCommentsScript, ['--aweme', workIds.join(','), '--max', String(perWork), ...workAgeArgs], 180000)
         // 页面被验证码拦住时：**如实说是验证码**，别当成"没有待回评论"
         //   （2026-10-25：抖音弹验证码后页面根本没加载，读半天没结果，看起来像脚本卡死）
         if (wr.parsed && wr.parsed.code === 'verify_required') {
@@ -696,7 +702,9 @@ export function apply(ctx, config) {
           }
         }
         let backfilled = 0
+        const tooOld = []
         for (const w of works) {
+          if (w.skipped === 'work_too_old') { tooOld.push(`${w.aweme}(${w.age_days}天)`); continue }
           for (const it of (w.items || [])) {
             if (!it.cid) continue
             // ⭐ 服务端说这条下面有「我」的回复 ⇒ 补录进台账（这就是"台本"）
@@ -722,6 +730,7 @@ export function apply(ctx, config) {
           }
         }
         if (backfilled) log(`台账补录 ${backfilled} 条（服务端确认我之前回过，来源不是本插件）`)
+        if (tooOld.length) log(`跳过 ${tooOld.length} 个旧作品（超过 ${Number(cfg.commentWorkMaxAgeDays) || 0} 天不再自动回）：${tooOld.join('、')}`)
         if (wr.parsed && wr.parsed.error) log('读作品评论失败：' + wr.parsed.error)
       }
 
@@ -1380,6 +1389,7 @@ export function apply(ctx, config) {
         parameters: {
           url: { type: 'string', description: '作品链接或 id（可逗号分隔多个）；不传就用配置里记着的作品' },
           max: { type: 'integer', description: '每个作品读多少条，默认 20' },
+          older: { type: 'boolean', description: '传 true 就忽略「作品发布超过 N 天」的限制（默认遵守设置）' },
         },
         output: {
           schema: {
@@ -1411,12 +1421,17 @@ export function apply(ctx, config) {
           const max = Math.max(1, Number((args && args.max) || 20))
           pauseWatcher()
           try {
-            const r = await runNode(cfg.workCommentsScript, ['--aweme', ids.slice(0, 3).join(','), '--max', String(max)], 180000)
+            // 手动查看也遵守「作品太旧就不看」的门槛；想强制看最新的就传 older:true
+            const ageArg = (args && args.older) ? ['--max-work-age-days', '0']
+              : ['--max-work-age-days', String(Number(cfg.commentWorkMaxAgeDays) || 0)]
+            const r = await runNode(cfg.workCommentsScript, ['--aweme', ids.slice(0, 3).join(','), '--max', String(max), ...ageArg], 180000)
             const p = r.parsed || {}
             if (!p.ok) return { ok: false, items: [], detail: (p.error || (r.error && r.error.message) || '读评论失败') }
             const selfNick = String((p.author && p.author.nick) || '')
             const items = []
+            const skippedWorks = []
             for (const w of (p.works || [])) {
+              if (w.skipped === 'work_too_old') { skippedWorks.push(`${w.aweme}（${w.age_days} 天）`); continue }
               for (const it of (w.items || [])) {
                 items.push({
                   aweme: String(w.aweme), cid: it.cid, nick: it.nick, text: it.text,
@@ -1429,7 +1444,8 @@ export function apply(ctx, config) {
             return {
               ok: true, total: items.length, items,
               detail: `读到 ${items.length} 条评论：我回过 ${items.filter((x) => x.answered_by_me).length} 条，`
-                + `还没回 ${open.length} 条` + (selfNick ? `（账号：${selfNick}）` : ''),
+                + `还没回 ${open.length} 条` + (selfNick ? `（账号：${selfNick}）` : '')
+                + (skippedWorks.length ? `；跳过 ${skippedWorks.length} 个旧作品：${skippedWorks.join('、')}（要看得传 older:true）` : ''),
             }
           } finally {
             resumeWatcher()

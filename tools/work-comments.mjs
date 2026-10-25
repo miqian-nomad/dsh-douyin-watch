@@ -31,6 +31,7 @@ const AWEMES = String(argOf('--aweme', '')).split(',').map((s) => s.trim()).filt
 const MAX = Math.max(1, Number(argOf('--max', '20')) || 20)
 const MAX_AGE_H = Number(argOf('--max-age-hours', '48')) || 48
 const DISCOVER = String(argOf('--discover', '1')) !== '0'   // 顺手列出"我全部作品"，自动跟进新作品
+const MAX_WORK_AGE_DAYS = Math.max(0, Number(argOf('--max-work-age-days', '0')) || 0)  // 作品发布超过这么多天就不再回（0 = 不限）
 
 const out = (o) => { console.log(JSON.stringify(o)); process.exitCode = o.ok ? 0 : 1 }
 if (!AWEMES.length) { out({ ok: false, error: '缺 --aweme（作品 id，可逗号分隔）' }); process.exit(1) }
@@ -43,11 +44,12 @@ const COMMON = {
   engine_version: '141.0.0.0', os_name: 'Windows', os_version: '10', platform: 'PC',
 }
 
-const JS = (ids, max, discover) => `(async function(){
+const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
   var COMMON = ${JSON.stringify(COMMON)};
   var IDS = ${JSON.stringify(ids)};
   var MAX = ${Number(max)};
   var DISCOVER = ${discover ? 'true' : 'false'};
+  var maxWorkAgeDays = ${Number(maxWorkAgeDays) || 0};
   var POOL = 4;
   function qs(d){ return Object.keys(d).map(function(k){return encodeURIComponent(k)+'='+encodeURIComponent(d[k]);}).join('&'); }
   function wait(ms){ return new Promise(function(r){ setTimeout(r, ms) }) }
@@ -69,17 +71,42 @@ const JS = (ids, max, discover) => `(async function(){
   if (authorUid) res.author = { nick: a.nickname || '', uid: authorUid, sec_uid: authorSec };
 
   // ② 顺手列出"我全部作品"（新发一条不用等通知也能被扫到）
+  var workTime = {};   // aweme_id -> 发布时间（秒）
   if (DISCOVER && authorSec) {
     var p = await jget('/aweme/v1/web/aweme/post/?' + qs(Object.assign({}, COMMON, { sec_user_id: authorSec, count:'10', max_cursor:'0' })));
     var pl = (p.aweme_list || []);
     res.discovered = pl.map(function(x){ return String(x.aweme_id) }).filter(Boolean);
+    for (var q = 0; q < pl.length; q++) {
+      var ct = Number(pl[q].create_time || 0);
+      if (ct > 0) workTime[String(pl[q].aweme_id)] = ct;
+    }
     await wait(300);
   }
 
-  // ③ 逐个作品读评论
+  // ③ 逐个作品读评论（先按"作品发布多久"筛，太老的不回 —— 别去翻旧账）
+  var nowSec = Math.floor(Date.now() / 1000);
   for (var i = 0; i < IDS.length; i++) {
     var aid = IDS[i];
     var w = { aweme: aid, total: 0, n: 0, items: [] };
+
+    // 作品发布时间：优先用作品列表里的，没有就查一次详情
+    if (!workTime[aid]) {
+      var dw = await jget('/aweme/v1/web/aweme/detail/?' + qs(Object.assign({}, COMMON, { aweme_id: aid })));
+      var aw = (dw.aweme_detail || {});
+      var ct2 = Number(aw.create_time || 0);
+      if (ct2 > 0) workTime[aid] = ct2;
+      await wait(250);
+    }
+    if (workTime[aid]) {
+      w.create_time = workTime[aid];
+      w.age_days = Math.floor((nowSec - workTime[aid]) / 86400);
+      if (maxWorkAgeDays > 0 && w.age_days > maxWorkAgeDays) {
+        w.skipped = 'work_too_old';       // 发布太久了：整条作品的评论都不再回
+        res.works.push(w);
+        continue;
+      }
+    }
+
     var all = [], cursor = 0, hasMore = true, pages = 0;
     while (all.length < MAX && hasMore && pages < 6) {
       var cl = await jget('/aweme/v1/web/comment/list/?' + qs(Object.assign({}, COMMON, { aweme_id: aid, cursor: String(cursor), count: '20', item_type: '0' })));
@@ -194,7 +221,7 @@ for (let attempt = 1; attempt <= 3 && !done; attempt++) {
       await sleep(6000)
     }
 
-    const raw = await withTimeout(c.ev(JS(AWEMES, MAX, DISCOVER)), 90000, '读评论')
+    const raw = await withTimeout(c.ev(JS(AWEMES, MAX, DISCOVER, MAX_WORK_AGE_DAYS)), 120000, '读评论')
     const parsed = JSON.parse(String(raw)) || {}
     const now = Math.floor(Date.now() / 1000)
     for (const w of parsed.works || []) {

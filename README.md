@@ -177,14 +177,19 @@ await presets.mount(agentCtx, id)
 ```
 每 commentScanMinutes（默认 10）分钟
   ├─ 自己作品下的评论：**读评论列表**（tools/work-comments.mjs）
-  │    /aweme/v1/web/comment/list/ 拿 cid/昵称/正文/时间/是否已有回复
-  │    —— 以它为准，不靠通知（通知会延迟、有条数上限）
+  │    /aweme/v1/web/comment/list/ 拿 cid/昵称/正文/时间
+  │    /aweme/v1/web/comment/list/reply/ 逐条探"我回过没有"（作者 uid 比对）
+  │    —— 以服务端为准，不靠通知、也不靠 reply_comment（它经常是 undefined）
+  ├─ 作品发布超过 commentWorkMaxAgeDays（默认 7）天的整条跳过（0 = 不限）
   └─ 通知：只补「别人回复了我的评论」（type 31）+ @你（45）
-       顺带把 type 35/46 的作品 id 记进 my-works.json（下次直接读评论列表）
-  → pickReplyTargets()：丢掉无 cid、自己发的、已回过（台账）、超时限（默认 48h）的
+       顺带把 type 35/46 的作品 id 记进 my-works.json
+  → pickReplyTargets()：丢掉无 cid、自己发的、已回过、超时限（默认 48h）的
   → 还有剩 → followup 叫醒 agent，把 cid + 链接 + 公开评论语气一起给它
   → agent 逐条 douyin_comment({ reply_to }) 回评（过上面三道闸）
 ```
+
+「作品发布多久就不回」和「评论多久以内才回」是两个不同门槛：
+前者按**作品发布时间**算（老视频下面冒出来的新评论也不回），后者按**评论时间**算。
 
 同一批 40 分钟内不重复催；`commentMaxPerRound`（默认 3）限制一次丢几条。
 

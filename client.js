@@ -439,6 +439,14 @@ window.__ModuleLoader__.load({
               style: Object.assign({}, ctlBase, { width: 100 }),
             }),
           ),
+          h(Row, { label: '作品发布超过几天就不回', hint: '按「作品发布多久」算，不是评论时间。老视频下面冒出来的新评论也不回；0 = 不限' },
+            h('input', {
+              type: 'number', min: 0, max: 365,
+              value: Number(cfg.commentWorkMaxAgeDays) || 0,
+              onChange: (e) => save({ commentWorkMaxAgeDays: Number(e.target.value) || 0 }),
+              style: Object.assign({}, ctlBase, { width: 100 }),
+            }),
+          ),
           h(Row, { label: '我的作品', hint: '作品链接或 id，逗号分隔。填了才"按评论列表批量看自己视频下的评论"；不填也会自动记住（收到作品评论通知时）' },
             h('input', {
               value: cfg.myWorks || '',
