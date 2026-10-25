@@ -22,6 +22,9 @@ const argv = process.argv.slice(2)
 const argOf = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? (argv[i + 1] ?? d) : d }
 const STATUS_ONLY = argv.includes('--status')
 const mode = String(argOf('--mode', '')).trim()
+// ⭐ 切到有头之后，顺手把页面开到**会触发滑块的地方**（默认视频页）——
+//    否则窗口停在私信页，人根本找不到滑块（2026-10-25 实测过：开窗口看不到验证）。
+const GOTO = String(argOf('--goto', '')).trim()
 const before = readBrowserMode()
 const out = (o) => { console.log(JSON.stringify(o)); process.exitCode = o.ok ? 0 : 1 }
 
@@ -58,13 +61,44 @@ try {
   writeBrowserMode(mode)
   // 按新模式拉起（ensureChrome 会读 browser-mode.json 决定带不带 --headless）
   const r = await ensureChrome({ url: 'https://www.douyin.com/chat' })
+
+  // 有头 + 指定了 goto：把页面开到那个地址，并检查滑块到底有没有出现
+  let probe = null
+  if (mode === 'headed' && GOTO) {
+    try {
+      const c = await openPage({ url: GOTO })
+      // ⚠️ openPage 只负责「连上页面」，不会导航——必须自己调 Page.navigate，
+      //    否则人看到的还是 /chat，当然找不到滑块（2026-10-25 实测踩到）
+      await c.send('Page.enable')
+      await c.send('Page.navigate', { url: GOTO })
+      await sleep(9000)
+      const raw = String(await c.ev(`(function(){
+        var t = String(document.title || '');
+        var vf = document.querySelector('iframe[src*="rc-verifycenter"], iframe[src*="verifycenter"], iframe[src*="/captcha"]');
+        var vis = !!(vf && vf.offsetWidth > 2 && vf.offsetHeight > 2 && getComputedStyle(vf).visibility !== 'hidden');
+        return JSON.stringify({ href: String(location.href).slice(0, 120), title: t.slice(0, 60), verify: /验证码|安全验证/.test(t) || vis, hasVideo: !!document.querySelector('video') });
+      })()`))
+      probe = JSON.parse(raw || '{}')
+      c.close()
+      await sleep(200)
+    } catch (e) {
+      probe = { error: String((e && e.message) || e) }
+    }
+  }
+
   out({
     ok: true,
     mode,
     mode_before: before,
     port: r.port,
     closed: closed.closed,
-    note: mode === 'headed' ? '有头窗口已弹出，请在屏幕上手动过验证码；过完可以切回无头' : '已收回无头模式',
+    goto: GOTO || '',
+    probe,
+    note: mode === 'headed'
+      ? (GOTO
+        ? (probe && probe.verify ? '有头窗口已弹出，验证码就在这个页面上，去划吧' : '有头窗口已弹出并打开了目标页；这次没弹验证码（没触发就说明暂时不需要）')
+        : '有头窗口已弹出，请在屏幕上手动过验证码；过完可以切回无头')
+      : '已收回无头模式',
   })
 } catch (e) {
   out({ ok: false, mode, mode_before: before, error: String((e && e.message) || e) })

@@ -165,6 +165,7 @@ window.__ModuleLoader__.load({
       const [status, setStatus] = useState(null);
       const [cleaning, setCleaning] = useState(false);
       const [injecting, setInjecting] = useState(false);
+      const [switching, setSwitching] = useState(false);
 
       const load = () => fetch('/api/douyin-watch/config')
         .then((r) => r.json())
@@ -363,24 +364,46 @@ window.__ModuleLoader__.load({
           ),
         ),
         h(Card, { title: '维护' },
-          h(Row, { label: '浏览器模式', hint: '要过验证码就切「有头」——屏幕上会弹出窗口让你手动划；过完切回「无头」。切换会重启浏览器，几十秒' },
-            h('select', {
-              value: cfg.browserMode || 'headless',
-              onChange: (e) => {
-                const m = e.target.value
-                setNote(m === 'headed' ? '正在切到有头（重启浏览器，稍等）…' : '正在收回无头（重启浏览器）…')
-                fetch('/api/douyin-watch/browser-mode', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: m }) })
-                  .then((r) => r.json())
-                  .then((d) => setNote(d.ok
-                    ? ('已切到' + (d.mode === 'headed' ? '有头：窗口应该已经弹出来了，去划验证码' : '无头：收起来了') + (d.note ? '（' + d.note + '）' : ''))
-                    : ('切换失败：' + (d.error || '未知'))))
-                  .catch(() => setNote('切换失败：接口没返回'))
-                  .then(() => load())
+          h(Row, { label: '浏览器模式', hint: '要过验证码就点右边那个按钮——它会切成有头、并直接跳到会弹滑块的视频页；过完切回「无头」' },
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+              h('select', {
+                value: cfg.browserMode || 'headless',
+                onChange: (e) => {
+                  const m = e.target.value
+                  setNote(m === 'headed' ? '正在切到有头（重启浏览器，稍等）…' : '正在收回无头（重启浏览器）…')
+                  fetch('/api/douyin-watch/browser-mode', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: m }) })
+                    .then((r) => r.json())
+                    .then((d) => setNote(d.ok
+                      ? ('已切到' + (d.mode === 'headed' ? '有头' : '无头') + (d.verify ? '｜滑块已出现，去划' : ''))
+                      : ('切换失败：' + (d.error || '未知'))))
+                    .catch(() => setNote('切换失败：接口没返回'))
+                    .then(() => load())
+                },
+                style: Object.assign({}, ctlBase, { width: 132 }),
               },
-              style: Object.assign({}, ctlBase, { width: 132 }),
-            },
-              h('option', { value: 'headless' }, '无头（平时）'),
-              h('option', { value: 'headed' }, '有头（过验证）'),
+                h('option', { value: 'headless' }, '无头（平时）'),
+                h('option', { value: 'headed' }, '有头（过验证）'),
+              ),
+              h('button', {
+                type: 'button',
+                disabled: switching,
+                onClick: () => {
+                  if (switching) return
+                  setSwitching(true)
+                  setNote('正在切到有头并打开视频页（重启浏览器，十几秒）…')
+                  fetch('/api/douyin-watch/browser-mode', {
+                    method: 'POST', headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ mode: 'headed' }),
+                  })
+                    .then((r) => r.json())
+                    .then((d) => setNote(d.ok
+                      ? (d.verify ? '有头窗口已弹出，滑块就在这个页面上，去划吧' : '有头窗口已打开目标页，但这次没弹验证码（说明暂时不需要）')
+                      : ('切换失败：' + (d.error || '未知'))))
+                    .catch(() => setNote('切换失败：接口没返回'))
+                    .then(() => { setSwitching(false); load() })
+                },
+                style: Object.assign({}, ctlBase, { width: 'auto', padding: '0 10px', cursor: switching ? 'default' : 'pointer', color: C.text2 }),
+              }, switching ? '切换中…' : '切有头 + 触发验证'),
             ),
           ),
           h(Row, { label: '清理浏览器缓存', hint: '只删 Cache / Code Cache 等可重建目录 + 7 天前的收件箱图片；Cookies 与本地存储一个字节不动' },

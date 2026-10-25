@@ -456,21 +456,29 @@ export function apply(ctx, config) {
           } catch { /* 空 body */ }
           const want = String(body.mode || '').trim()
           if (want !== 'headed' && want !== 'headless') return sendJson(400, { ok: false, error: 'mode 必须是 headed 或 headless' })
+          // goto：切到有头后直接把页面开到会触发滑块的地方（默认用配置里的 commentUrl 视频页）
+          const goto = String(body.goto || '').trim() || (want === 'headed' ? String(cfg.commentUrl || '').trim() : '')
           pauseWatcher()
           let r
           try {
-            // 120 秒：关旧实例 + 起新实例 + 等 CDP
-            r = await runNode(join(HERE, 'tools', 'browser-mode.mjs'), ['--mode', want], 120000)
+            // 120 秒：关旧实例 + 起新实例 + 等 CDP +（可选）导航到目标页再看滑块
+            const args = ['--mode', want]
+            if (goto) args.push('--goto', goto)
+            r = await runNode(join(HERE, 'tools', 'browser-mode.mjs'), args, 180000)
           } finally {
             resumeWatcher()
           }
           const p = r.parsed || {}
-          log('浏览器模式切换：' + (p.ok ? `${p.mode_before} → ${p.mode}（port=${p.port}）` : '失败 ' + (p.error || r.raw)))
+          log('浏览器模式切换：' + (p.ok
+            ? (String(p.mode_before) + ' → ' + String(p.mode) + '（port=' + p.port + (goto ? '，goto=' + goto : '') + '，滑块=' + (p.probe && p.probe.verify ? '出现' : '未出现') + '）')
+            : ('失败 ' + (p.error || r.raw))))
           return sendJson(200, {
             ok: !!p.ok,
             mode: p.mode || want,
             port: Number(p.port) || 0,
             note: p.note || '',
+            verify: !!(p.probe && p.probe.verify),
+            probe: p.probe || null,
             error: p.ok ? '' : String(p.error || '切换失败'),
           })
         }
