@@ -82,21 +82,14 @@ try {
     await sleep(6000)
   }
 
-  if (DRY) {
-    out({ ok: true, dry: true, aweme_id: AWEME, reply_to: REPLY || '(顶层评论)', len: TEXT.length, chrome: chromed })
-    c.close()
-    await sleep(200)
-    process.exitCode = 0
-    // 走到这里自然结束，别用 process.exit（会触发 libuv 断言）
-    throw { __done: true }
-  }
-
   // ⚠️ 先导航到目标视频页再发（写接口在视频页上下文里才稳）。
   //    但**别把成功归因于"页面上下文"** —— 2026-10-24 的真实链路是：
   //      /chat → /video/<aweme> 这一跳**会触发验证码滑块**（rc-verifycenter / 验证码中间页）；
   //      人手工划过了，导航才真的落地，写接口才返回 cid；
   //      没人过 = 页面被拦在验证页，发布接口回 `200 + 空 body` 或 403。
   //    所以下面要**检测是否被验证拦住**并如实报错，不许再静默重试五次。
+  //    注意：`--dry` 也要走到页面脚本里（见下面的 ENV.dry），否则"注入漏了变量"这种
+  //    只在页面侧才炸的错误，dry run 永远发现不了（2026-10-25 就是这么漏出去的）。
   if (!String(await c.ev('location.href')).includes(`/video/${AWEME}`)) {
     await c.send('Page.navigate', { url: `https://www.douyin.com/video/${AWEME}` })
     await sleep(6000)
@@ -129,10 +122,25 @@ try {
     // 检测本身失败就继续（别因为探测失败就不发）
   }
 
+  // 🔒 页面脚本的变量**只从这一个 ENV 注入**。
+  //    2026-10-25 的事故：Node 侧加了 REPLY_TO_REPLY，页面模板里忘了同步注入，
+  //    结果所有回评在页面里抛 ReferenceError（fetch 都没发出去）。
+  //    写成一个大对象就没法"忘一个"：缺字段只会是 undefined，而且一眼能看全。
+  const ENV = {
+    aweme: AWEME,
+    reply: REPLY,
+    replyToReply: REPLY_TO_REPLY,
+    text: TEXT,
+    dry: DRY,
+    mention: MENTION,
+  }
+
   const js = `(async function(){
-    var AWEME = ${JSON.stringify(AWEME)};
-    var REPLY = ${JSON.stringify(REPLY)};
-    var TEXT = ${JSON.stringify(TEXT)};
+    var ENV = ${JSON.stringify(ENV)};
+    var AWEME = ENV.aweme;
+    var REPLY = ENV.reply;
+    var REPLY_TO_REPLY = ENV.replyToReply;
+    var TEXT = ENV.text;
     var COMMON = {
       device_platform:'webapp', aid:'6383', channel:'channel_pc_web',
       pc_client_type:'1', version_code:'190500', version_name:'19.5.0',
@@ -151,7 +159,7 @@ try {
     var o = { http: 0, cid: '', status_code: null, head: '', mention: null };
 
     // ── ① 把要 @ 的人的 uid + sec_uid 凑齐（请求体里两个都要，缺一个服务端就把 mention 剥掉）
-    var AT = { name: ${JSON.stringify(MENTION.name)}, uid: ${JSON.stringify(MENTION.uid)}, sec: ${JSON.stringify(MENTION.secUid)} };
+    var AT = ENV.mention ? { name: ENV.mention.name || '', uid: ENV.mention.uid || '', sec: ENV.mention.secUid || '' } : { name: '', uid: '', sec: '' };
     if (AT.name || AT.uid || AT.sec) {
       if (!AT.uid || !AT.sec) {
         if (AT.name) {   // 先在评论区里按昵称找（@ 评论过的人 / 作者最常见的场景）
@@ -196,8 +204,17 @@ try {
     });
     if (REPLY) {
       body.reply_id = REPLY
-      // 回子评论：reply_id 是根、reply_to_reply_id 才是那条子评论
+      // 回子评论：reply_id 是根、reply_to_reply_id 才是那条子评论。
+      //   ⚠️ 两者都填子评论 cid 时接口照样回 cid，但服务端不落点（2026-10-25 实测：潇那条）。
       body.reply_to_reply_id = REPLY_TO_REPLY || REPLY
+    }
+    // --dry：把**请求体**造出来就返回，绝不发出去。
+    //   这一步在页面里做（不是 Node 里提前退出），所以能真正暴露"页面脚本引用了没注入的变量"
+    //   这类只在页面侧才炸的错误。
+    if (ENV.dry) {
+      o.http = 200
+      o.dry = { url: url, body_form: new URLSearchParams(body).toString().slice(0, 600) }
+      return JSON.stringify(o)
     }
     try {
       var r = await fetch(url, {
@@ -215,18 +232,68 @@ try {
         o.cid = (j.comment && j.comment.cid) ? String(j.comment.cid) : '';
       } catch (e2) { o.parse_error = String(e2 && e2.message || e2); }
     } catch (e) { o.error = String((e && e.message) || e); }
+
+    // ── 落点自检：拿到 cid 不等于真的挂上去了（2026-10-25 实测过"返回 cid 但查不到"）。
+    //    回评后隔一下再去子评论列表里找自己这条，找不到就如实报，别把假成功当成功。
+    if (REPLY && o.cid && !o.error) {
+      var landed = false, tries = 0, lastN = 0;
+      while (!landed && tries < 3) {
+        if (tries > 0) await new Promise(function(r){ setTimeout(r, 900) });
+        var chk = await getJSON('/aweme/v1/web/comment/list/reply/?' + qs(Object.assign({}, COMMON, { item_id: AWEME, comment_id: REPLY, cursor: '0', count: '50', item_type: '0' })));
+        var lst = (chk.json && chk.json.comments) || [];
+        lastN = lst.length;
+        for (var q = 0; q < lst.length; q++) { if (String(lst[q].cid) === String(o.cid)) { landed = true; break } }
+        tries++;
+      }
+      o.landed = landed;
+      o.thread_len = lastN;
+      if (!landed) o.land_note = '接口返回了 cid，但在「' + REPLY + '」的子评论列表里找不到这条（可能目标评论不可见/被折叠）';
+    }
     return JSON.stringify(o);
   })()`
 
-  const raw = await c.ev(js)
+  // 先在 Node 侧编译一遍页面脚本：语法错能在这里发现，不用等页面抛
+  try { new Function(js) } catch (e) {
+    out({ ok: false, error: '页面脚本语法错误（没发出去）：' + ((e && e.message) || e) })
+    c.close(); process.exit(1)
+  }
+
+  let raw
+  try {
+    raw = await c.ev(js)
+  } catch (e) {
+    // 页面里抛的错会走到这里 —— 原样报出来，别翻译成"发送失败"
+    out({
+      ok: false,
+      error: '页面脚本执行失败（请求没发出去）：' + ((e && e.message) || e),
+      hint: '这类错误通常是注入变量缺失/名字写错，属于代码问题，不是风控；看 tools/comment-api.mjs 的 ENV',
+      chrome: chromed,
+    })
+    c.close(); process.exit(1)
+  }
   c.close()
   await sleep(200)   // 等 WebSocket 真正关掉再退出，否则 libuv 会断言
 
   let res
   try { res = JSON.parse(raw) } catch { out({ ok: false, error: '页面没返回可解析结果', raw: String(raw).slice(0, 400), chrome: chromed }); process.exit(1) }
 
+  // --dry：把将要 POST 的请求体原样打出来（真的没发）
+  if (DRY) {
+    out({
+      ok: true, dry: true, aweme_id: AWEME,
+      reply_to: REPLY || '(顶层评论)',
+      reply_to_reply: REPLY_TO_REPLY || undefined,
+      len: TEXT.length,
+      would_post: res.dry || undefined,
+      chrome: chromed,
+    })
+    process.exit(0)
+  }
+
   const cid = String(res.cid || '')
-  const ok = res.http === 200 && !!cid
+  // 回评必须**确认落点**：拿到 cid 只说明接口收了，不代表挂上去了
+  const landed = res.landed === undefined ? null : !!res.landed
+  const ok = res.http === 200 && !!cid && (landed === false ? false : true)
   const mentionNote = res.mention
     ? (res.mention.uid && res.mention.sec ? `@${res.mention.name}(uid=${res.mention.uid})` : `@${res.mention.name || '?'}（没凑齐 uid/sec_uid）`)
     : ''
@@ -236,6 +303,9 @@ try {
     http: res.http,
     cid: cid || undefined,
     reply_to: REPLY || '(顶层评论)',
+    reply_to_reply: REPLY_TO_REPLY || undefined,
+    landed: landed === null ? undefined : landed,        // 回评落点自检
+    land_note: res.land_note || undefined,
     aweme_id: AWEME,
     len: TEXT.length,
     text_sent: res.text,
@@ -244,9 +314,11 @@ try {
     chrome: chromed,
     status_code: res.status_code === null ? undefined : res.status_code,
     error: ok ? undefined
-      : (res.error === 'mention_target_not_found'
-        ? `要 @ 的那个人没找到（评论区前 50 条里没有「${MENTION.name || MENTION.secUid}」；可显式传 --mention-uid 和 --mention-secuid）`
-        : (res.error || `没拿到 cid（status_code=${res.status_code}）`)),
+      : (res.land_note
+        ? res.land_note
+        : (res.error === 'mention_target_not_found'
+          ? `要 @ 的那个人没找到（评论区前 50 条里没有「${MENTION.name || MENTION.secUid}」；可显式传 --mention-uid 和 --mention-secuid）`
+          : (res.error || `没拿到 cid（status_code=${res.status_code}）`))),
     head: ok ? undefined : String(res.head || '').slice(0, 300),
   })
 } catch (e) {

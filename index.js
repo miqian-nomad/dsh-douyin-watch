@@ -1585,7 +1585,10 @@ export function apply(ctx, config) {
           schema: {
             type: 'object', additionalProperties: false,
             required: ['ok', 'cid'],
-            properties: { ok: { type: 'boolean' }, cid: { type: 'string' }, reply_to: { type: 'string' }, status_code: { type: 'integer' }, detail: { type: 'string' } },
+            properties: {
+              ok: { type: 'boolean' }, cid: { type: 'string' }, reply_to: { type: 'string' },
+              landed: { type: 'boolean' }, status_code: { type: 'integer' }, detail: { type: 'string' },
+            },
           },
           render: (_args, value) => TEXT(value.detail || (value.ok ? '评论已发（cid=' + value.cid + '）' : '评论失败')),
         },
@@ -1645,8 +1648,15 @@ export function apply(ctx, config) {
             ok,
             cid,
             reply_to: replyTo || '',
+            // 回评落点自检：comment-api 会去子评论列表里找自己这条；
+            //   找不到就是"返回了 cid 但没挂上"，不能报成功（2026-10-25 踩过）
+            landed: p.landed === undefined ? undefined : !!p.landed,
             status_code: Number(p.status_code) || 0,
-            detail: ok ? ((replyTo ? '已回评（cid=' + cid + '，挂到 ' + replyTo + ' 下）' : '已发（cid=' + cid + '）') + quotaNote) : ((p.error) || '没拿到 cid'),
+            detail: ok
+              ? ((replyTo
+                ? `已回评（cid=${cid}，挂到 ${replyTo} 下${p.landed === false ? '，但落点没查到' : '，落点已核对'}）`
+                : `已发（cid=${cid}）`) + quotaNote)
+              : ((p.error) || '没拿到 cid'),
           }
           } finally { resumeWatcher() }
         },
