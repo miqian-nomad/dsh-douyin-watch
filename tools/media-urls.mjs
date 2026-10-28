@@ -65,6 +65,10 @@ const DETAIL_JS = (aid) => `(async function(){
     var pa = v.play_addr || {};
     var rates = (v.bit_rate || []).map(function(b){ return { gear: b.gear_name, br: b.bit_rate, url: (b.play_addr && b.play_addr.url_list || [])[0] || '' } })
       .filter(function(x){ return x.url });
+    // 音轨：抖音不少作品的 play_addr 是**纯视频流**（ffprobe 只有 video 一条），
+    //   人声在 music.play_url 那条 mp3 里。2026-10-28 实测：不给 audio 的话技能会卡在
+    //   「提取音频失败（ffmpeg rc=-22）」，连带抽帧也不做，表现成"没画面也没人声"。
+    var music = ((a.music || {}).play_url || {}).url_list || [];
     return JSON.stringify({
       ok: !!(pa.url_list && pa.url_list.length),
       http: r.status,
@@ -72,6 +76,8 @@ const DETAIL_JS = (aid) => `(async function(){
       author: (a.author || {}).nickname || '',
       dur_s: v.duration ? Math.round(v.duration / 1000) : 0,
       video: (pa.url_list || [])[0] || '',
+      audio: music[0] || '',
+      music_dur: (a.music || {}).duration || 0,
       rates: rates.slice(0, 6)
     });
   } catch (e) { return JSON.stringify({ ok: false, error: String(e && e.message || e) }) }
@@ -93,17 +99,27 @@ try {
   try {
     const d = JSON.parse(String(await c.ev(DETAIL_JS(AWEME))) || '{}')
     if (d && d.ok && d.video) {
-      // 挑码率接近 600k 的那档（够看清画面，又不用下 1080p）
-      const sorted = (d.rates || []).slice().sort((a, b) => Math.abs(a.br - 600000) - Math.abs(b.br - 600000))
+      // 挑一档：码率接近 600k（够看清画面、又不用下 1080p），**但优先 H.264**。
+      //   2026-10-28 踩过：有些作品最接近 600k 的那档是 **H.265（url 里是 media-video-hvc1）**，
+      //   下载下来 ffmpeg 抽不出帧、连音轨都没有 → frame_count=0、ASR 0 字，
+      //   表现成"这条视频没画面也没人声"，白跑一趟。改成编码优先、码率其次。
+      const kindOf = (u) => (/hvc/i.test(u) ? 2 : (/avc/i.test(u) ? 0 : 1)) // 0=avc 1=未知 2=hvc
+      const sorted = (d.rates || []).slice().sort((a, b) => {
+        const ka = kindOf(a.url || ''), kb = kindOf(b.url || '')
+        if (ka !== kb) return ka - kb
+        return Math.abs(a.br - 600000) - Math.abs(b.br - 600000)
+      })
       const pick = sorted[0] || null
       result = {
         ok: true,
         source: 'detail_api',
         video: pick && pick.url ? pick.url : d.video,
+        audio: d.audio || undefined,
         title: d.title || '',
         author: d.author || '',
         dur_text: d.dur_s ? String(d.dur_s) : '',
         video_br: pick ? Math.round(pick.br / 1000) : undefined,
+        video_codec: pick ? (kindOf(pick.url || '') === 0 ? 'avc' : kindOf(pick.url || '') === 2 ? 'hvc' : 'unknown') : undefined,
       }
     }
   } catch { /* 接口挂了就走兜底 */ }

@@ -284,7 +284,7 @@ notice_list_v2[].comment.comment = {
 | Node.js（DSH 自带） | ✅ | 所有工具都是 `.mjs`，用 `cfg.nodeBin`（默认 `process.execPath`）执行 |
 | Chrome / Edge / Chromium | ✅ | 9334 无头实例；`lib/chrome.mjs` 自动找，找不到可用 `DOUYIN_BROWSER` 指定 |
 | 抖音登录态 | ✅ | 在 9334 里登一次，`douyin_save_login` 存 cookie，之后 `douyin_relogin` 恢复 |
-| **Python + curl_cffi** | ❌ **不再需要** | 取候选 / 读通知已改成页面内同源请求（`feed-pick.mjs` / `notice-read.mjs`）。`*.py` 仅作历史参考 |
+| **Python + curl_cffi** | ⚠️ **仅「签名直连」需要（可选）** | 取候选 / 读通知仍是页面内同源请求（`feed-pick.mjs` / `notice-read.mjs`），不依赖 Python。**但读楼中楼（`/comment/list/reply/`）不签名就不返回**，所以 2026-10-28 起加了一条可选快路：`_deps\scripts\douyin-signer\signed_get.py`（vendored `cv-cat/DouYin_Spider` 的 a_bogus）自己算签名直连，需要 `curl_cffi` + `cryptography`。不装也能用：`tools/comment-thread.mjs` 会自动退回「打开页面点开回复」的老路，只是慢十几秒。 |
 
 ## 已知限制 / 风控
 
@@ -309,10 +309,12 @@ notice_list_v2[].comment.comment = {
 
 ## 文件
 
-- `index.js` —— 插件本体（watcher + 9 个工具）
+- `index.js` —— 插件本体（watcher + 14 个工具）
 - `cordis.patch.yml` —— 挂载声明（bundle patch）
 - `locale/*.json`、`icon.svg` —— 插件列表里的中文名/描述/图标
-- `tools/*.mjs` —— 10 个动作脚本（纯 Node，无 Python 依赖）
+- `tools/*.mjs` —— 动作脚本（纯 Node；媒体链路靠 `media-urls.mjs` 截直链 + 技能里的 ffmpeg/whisper）
+- `tools/comment-thread.mjs` —— 楼中楼：**先试签名直连**（`_deps\scripts\douyin-signer\signed_get.py`），拿不到再点开页面收响应，最后兜底读 DOM
+- `tools/video-thread.mjs` —— 读任意视频（含别人的）评论区：顶层评论 + 可选楼中楼（楼中楼委托给上一个脚本）
 - `tools/*.py` —— **已弃用**，仅历史参考
 
 ## 维护：清浏览器缓存（2026-10-24 加）

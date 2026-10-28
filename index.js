@@ -62,7 +62,7 @@ import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import { checkPublicComment, recordPublicComment, guardStats, repliedTargets, ledgerHasTarget, setGuardHome } from './lib/outbound-guard.mjs'
+import { checkPublicComment, recordPublicComment, guardStats, repliedTargets, ledgerHasTarget, setGuardHome, guardFile } from './lib/outbound-guard.mjs'
 import { pickReplyTargets, buildCommentPrompt } from './lib/notice-queue.mjs'
 
 // 插件自身目录（用于定位 tools/ 里的脚本，让包自包含、不依赖外部路径）
@@ -184,6 +184,9 @@ const DEFAULTS = {
   cookieSaveScript: join(HERE, 'tools', 'cookie-save.mjs'),
   cookieLoadScript: join(HERE, 'tools', 'cookie-load.mjs'),
   commentApiScript: join(HERE, 'tools', 'comment-api.mjs'),
+  commentThreadScript: join(HERE, 'tools', 'comment-thread.mjs'),
+  // 任意视频（含别人的）评论区 + 楼中楼读取：顶层评论的 cid 只在这里拿得到
+  videoCommentsScript: join(HERE, 'tools', 'video-thread.mjs'),
   commentDeleteScript: join(HERE, 'tools', 'comment-delete.mjs'),
   commentScript: join(HERE, 'tools', 'comment-mention-ui.mjs'),
   noticeScript: join(HERE, 'tools', 'notice-read.mjs'),
@@ -1587,7 +1590,8 @@ export function apply(ctx, config) {
             required: ['ok', 'cid'],
             properties: {
               ok: { type: 'boolean' }, cid: { type: 'string' }, reply_to: { type: 'string' },
-              landed: { type: 'boolean' }, status_code: { type: 'integer' }, detail: { type: 'string' },
+              landed: { type: 'boolean' }, unverified: { type: 'boolean' },
+              status_code: { type: 'integer' }, detail: { type: 'string' },
             },
           },
           render: (_args, value) => TEXT(value.detail || (value.ok ? '评论已发（cid=' + value.cid + '）' : '评论失败')),
@@ -1644,20 +1648,185 @@ export function apply(ctx, config) {
               quotaNote = `　本小时第 ${st.hour} 条 / 今天第 ${st.day} 条`
             } catch { /* 记账失败不影响结果 */ }
           }
-          return {
+          // 🔴 2026-10-28 事故补丁：**发出去但没拿到评论 id**（服务端回 200、正文里没带 comment）
+          //   以前这种情况既不记账也不提示，调用方（我）就当成失败又发了一遍 → 出现两条一样的回复。
+          //   现在：哪怕没有 cid 也**先记账**（cid 留空），这样同一句在去重窗口内会被闸门拦住，
+          //   想重发也发不出去；同时把 pending 标记带出去，提醒"别重发，先去页面确认"。
+          let unverified = false
+          const httpOk = Number(p.http) === 200
+          if (!ok && httpOk) {
+            unverified = true
+            try { recordPublicComment({ aweme, target: replyTo || '', text, cid: '', state: 'unverified' }) } catch { /* 记账失败不影响结果 */ }
+          }
+          // 注意：输出对象里绝不能出现 undefined（不可 JSON 往返，宿主会报
+          //   "value is not lossless JSON"，动作其实已执行、结果回不来）。
+          //   2026-10-27 修：landed 只有在 comment-api 真报了才放进去。
+          const out = {
             ok,
             cid,
             reply_to: replyTo || '',
-            // 回评落点自检：comment-api 会去子评论列表里找自己这条；
-            //   找不到就是"返回了 cid 但没挂上"，不能报成功（2026-10-25 踩过）
-            landed: p.landed === undefined ? undefined : !!p.landed,
             status_code: Number(p.status_code) || 0,
             detail: ok
               ? ((replyTo
                 ? `已回评（cid=${cid}，挂到 ${replyTo} 下${p.landed === true ? '，落点已看到' : (p.landed === false ? '，落点这一页没看到（不等于没发出去）' : '')}）`
                 : `已发（cid=${cid}）`) + quotaNote)
-              : ((p.error) || '没拿到 cid'),
+              : (unverified
+                ? '服务端回了 200 但没给评论 id（很可能已经发出去了）：已记账并锁住同一句，**别重发**，先去页面/手机确认'
+                : ((p.error) || '没拿到 cid')),
           }
+          if (unverified) out.unverified = true
+          // 回评落点自检：comment-api 会去子评论列表里找自己这条；
+          //   找不到就是"返回了 cid 但没挂上"，不能报成功（2026-10-25 踩过）
+          if (p.landed !== undefined && p.landed !== null) out.landed = !!p.landed
+          return out
+          } finally { resumeWatcher() }
+        },
+      }))
+
+
+      // ── 楼中楼读取（2026-10-27 新增）─────────────────────────────────────
+      // 楼中楼回复必须要「子评论的 cid」，通知里不给、DOM 属性里也没有
+      // （2026-10-27 实测只能从 React fiber 里挖）。这里直接用已登录页面上下文
+      // 调 /comment/list/reply/ 读回来，省掉那一步。
+      regTool(defineTool({
+        name: 'douyin_comment_thread',
+        description: '读「楼中楼」（某条顶层评论下的回复；自己的、别人的视频都行），返回每条回复的 cid / 昵称 / 正文 / 时间。想回哪条就用 douyin_comment：reply_to=那条回复的 cid、reply_parent=它所属顶层评论的 cid。不传 cid 就从本地台账里取本视频自己发过的评论。读法：接口不签名会挂，脚本改成点开「展开N条回复」收页面自己发出的响应，所以一条要十几秒。',
+        parameters: {
+          url: { type: 'string', description: '视频链接（含 /video/<id>）；不传就用配置里的 commentUrl' },
+          cid: { type: 'string', description: '顶层评论 cid，可逗号分隔多个；不传就自动用台账里本视频我发过的评论' },
+          max: { type: 'integer', description: '每条顶层评论最多读多少条回复，默认 30（上限 50）' },
+        },
+        output: {
+          schema: {
+            type: 'object', additionalProperties: false,
+            properties: {
+              ok: { type: 'boolean' },
+              aweme: { type: 'string' },
+              roots: { type: 'integer' },
+              replies: { type: 'integer' },
+              threads: { type: 'array', items: { type: 'object', additionalProperties: true } },
+              detail: { type: 'string' },
+            },
+          },
+          render: (_args, value) => TEXT(value.detail || (value.ok ? '读到 ' + value.replies + ' 条楼中楼' : '读取失败')),
+        },
+        async execute(args) {
+          pauseWatcher(); try {
+            const url = String((args && args.url) || cfg.commentUrl || '')
+            const aweme = awemeIdOf(url)
+            if (!aweme) throw new Error('douyin_comment_thread 需要有效的视频 url（含 /video/<id>）')
+
+            let cids = String((args && args.cid) || '')
+              .split(',').map((s) => s.trim()).filter(Boolean)
+            let fromLedger = false
+            if (!cids.length) {
+              fromLedger = true
+              try {
+                const rows = readFileSync(guardFile(), 'utf8')
+                  .split('\n').filter(Boolean)
+                  .map((l) => { try { return JSON.parse(l) } catch { return null } })
+                const set = new Set()
+                for (const r of rows) {
+                  if (!r) continue
+                  if (String(r.aweme) !== String(aweme)) continue
+                  const cid = String(r.cid || '').trim()
+                  if (cid) set.add(cid)
+                }
+                cids = Array.from(set)
+              } catch { /* 台账不存在就空着 */ }
+            }
+            if (!cids.length) {
+              return { ok: false, aweme, roots: 0, replies: 0, threads: [], detail: '没有可查的顶层评论 id：台账里没有这条视频的评论，传 cid 试试' }
+            }
+
+            const max = Math.min(50, Math.max(1, Number(args && args.max) || 30))
+            const cargs = ['--aweme', aweme, '--max', String(max)]
+            for (const one of cids) cargs.push('--cid', one)
+            const r = await runNode(cfg.commentThreadScript, cargs, 120000)
+            const p = r.parsed || {}
+            const threads = Array.isArray(p.threads) ? p.threads : []
+            let total = 0
+            for (const t of threads) total += (t && t.replies && t.replies.length) || 0
+            return {
+              ok: !!p.ok,
+              aweme,
+              roots: threads.length,
+              replies: total,
+              threads,
+              detail: p.ok
+                ? `查到 ${threads.length} 条顶层评论，共 ${total} 条楼中楼回复${fromLedger ? '（顶层 id 取自台账）' : ''}`
+                : String(p.error || '读取失败'),
+            }
+          } finally { resumeWatcher() }
+        },
+      }))
+
+
+      // ── 任意视频（含别人的）评论区 + 楼中楼读取（2026-10-27 新增）────────
+      // 为什么单独一条工具：
+      //   ① douyin_work_comments 走创作者后台，只认**自己作品**；
+      //   ② douyin_comment_thread 只按给定 cid 读楼中楼，而别人的视频下我们手上
+      //      没有顶层 cid（通知不给、DOM 属性也没有，只能从 React fiber 里挖）。
+      //   于是"回别人视频下的楼中楼"卡在第一步：找不到顶层评论的 cid。
+      //   这里一次把顶层评论（带 cid）+ 每条的楼中楼（带子评论 cid）读回来。
+      //   发还是走 douyin_comment：回顶层 reply_to=顶层 cid；回子评论
+      //   reply_to=子评论 cid + reply_parent=顶层 cid（少给一个服务端就"假成功"）。
+      regTool(defineTool({
+        name: 'douyin_video_comments',
+        description: '读「任意视频」（包括别人的视频）评论区：返回每条顶层评论的 cid / 昵称 / 正文 / 时间 / 回复数；传 replies:true 连每条下面的楼中楼一起读（子评论也带 cid）。想回哪条就用 douyin_comment：回顶层评论 reply_to=顶层 cid；回楼中楼 reply_to=子评论 cid、reply_parent=顶层 cid。',
+        parameters: {
+          url: { type: 'string', description: '视频链接（含 /video/<id>）或纯视频 id；不传就用配置里的 commentUrl' },
+          max: { type: 'integer', description: '读多少条顶层评论，默认 20（上限 50）' },
+          replies: { type: 'boolean', description: '传 true 就连楼中楼一起读（走页面点开回复的路子，只读回复数最多的前 3 条顶层评论，一条十几秒）' },
+          max_replies: { type: 'integer', description: '每条顶层评论最多读多少条楼中楼，默认 20（上限 50）' },
+        },
+        output: {
+          schema: {
+            type: 'object', additionalProperties: false,
+            properties: {
+              ok: { type: 'boolean' },
+              aweme: { type: 'string' },
+              total: { type: 'integer' },
+              replies: { type: 'integer' },
+              with_replies: { type: 'boolean' },
+              has_more: { type: 'boolean' },
+              items: { type: 'array', items: { type: 'object', additionalProperties: true } },
+              detail: { type: 'string' },
+            },
+          },
+          render: (_args, value) => TEXT(value.detail || (value.ok ? '读到 ' + value.total + ' 条评论' : '读取失败')),
+        },
+        async execute(args) {
+          const raw = String((args && args.url) || cfg.commentUrl || '').trim()
+          const aweme = awemeIdOf(raw) || (/^\d{15,}$/.test(raw) ? raw : '')
+          if (!aweme) throw new Error('douyin_video_comments 需要视频 url（含 /video/<id>）或纯视频 id')
+          const max = Math.min(50, Math.max(1, Number((args && args.max) || 20)))
+          const wantReplies = !!(args && args.replies)
+          const maxReplies = Math.min(50, Math.max(1, Number((args && args.max_replies) || 20)))
+
+          const cargs = ['--aweme', aweme, '--max', String(max), '--max-replies', String(maxReplies)]
+          if (wantReplies) cargs.push('--replies')
+
+          pauseWatcher()
+          try {
+            const r = await runNode(cfg.videoCommentsScript, cargs, 180000)
+            const p = r.parsed || {}
+            const items = Array.isArray(p.items) ? p.items : []
+            let replyN = 0
+            for (const it of items) replyN += (it && it.replies && it.replies.length) || 0
+            return {
+              ok: !!p.ok,
+              aweme,
+              total: items.length,
+              replies: replyN,
+              with_replies: wantReplies,
+              has_more: !!p.has_more,
+              items,
+              detail: p.ok
+                ? `读到 ${items.length} 条顶层评论${wantReplies ? `、${replyN} 条楼中楼` : '（没读楼中楼）'}`
+                  + (p.has_more ? '；还有更多评论，加大 max 再读' : '')
+                : String(p.error || '读取失败'),
+            }
           } finally { resumeWatcher() }
         },
       }))
