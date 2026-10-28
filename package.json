@@ -1,6 +1,6 @@
 {
   "name": "dsh-douyin-watch",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "让大肥鱼活在抖音上：新私信叫醒 agent，能回私信、发评论、回楼中楼、读通知、分析视频；带频率上限、去重和发完核对。",
   "license": "MIT",
   "type": "module",
