@@ -341,3 +341,21 @@ notice_list_v2[].comment.comment = {
 接口：`POST /api/douyin-watch/persona/inject` → 优先 `agent.inject()`（只加上下文、不唤醒），老版本 DSH 没有 inject 就退化成 `followup()`（会多跑一轮），返回值里的 `via` 会告诉你走了哪条。
 
 - **清缓存会短暂断读**：`clean-cache.mjs` 先关浏览器再删（否则 EPERM），重启后有概率撞「验证码中间页」，那 30–60 秒读不到私信，期间的消息会推迟到下一轮唤醒。看着像装死，其实没丢；碰上就切有头过验证。
+
+---
+
+## 更新日志
+
+### 0.4.5（2026-10-28）
+- **签名直连读数据**：新增可选快路 `_deps\scripts\douyin-signer\signed_get.py`（vendored `cv-cat/DouYin_Spider` 的 a_bogus）。
+  覆盖评论列表、楼中楼、搜索、通知；**视频详情/作品列表仍被 Argus 拦**（要 uifid + x-secsdk 第二层签名），继续走页面。
+  没装/没依赖时全部自动退回原路，功能不受影响。
+- **新工具 `douyin_video_comments`**：读任意视频（含别人的）评论区，可选连楼中楼；楼中楼由 `tools/comment-thread.mjs` 负责，
+  三条路依次降级：签名直连 → 点开页面收响应 → 从已渲染节点挖 cid。
+- **评论发送更保守**：发布接口回 200 但没给 cid 时，不再判失败 —— 先用签名直连把列表读回来按「文字 + 15 分钟内」核对，
+  找到就补回 cid；核不到也先记账锁句，7 天内同一句发不出去（防重复评论事故）。
+- **媒体链路修好**：`media-urls.mjs` 补上音轨（`music.play_url`）、码率选择优先 H.264。
+  以前抽不到帧/没有声音，就是因为直链只有画面、音轨在另一条地址。
+- **评论区自动回拆两类**：`commentAutoReplyWork`（自己作品下，默认开）/ `commentAutoReplyOthers`（别人视频下，默认关）。
+- **设置页**：吸顶快捷跳转（按卡片固定锚点）、状态卡改四格（今日额度 / 最后读取 / 签名直连 / 最后唤醒）、
+  「已记住作品：N 个」、结尾「去 GitHub 点个星」。
