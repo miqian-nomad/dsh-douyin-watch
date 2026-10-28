@@ -129,12 +129,14 @@ window.__ModuleLoader__.load({
     }
 
     // 运行状态卡片：绿=运行中、灰=已停止、红=有错误。数据每 5 秒刷新一次（宿主 side 拼好）。
-    function StatusCard({ s }) {
-      const row = (k, v) => h('div', {
-        style: { display: 'flex', gap: 10, fontSize: 12, color: C.text2, lineHeight: '20px' },
+    // 2026-10-28 改成「一行状态 + 2×2 指标」：把最该看的四个数摆出来
+    //   （今日评论额度 / 最后读取 / 签名直连 / 依赖），别让卡里空着。
+    function StatusCard({ s, q }) {
+      const cell = (k, v, tone) => h('div', {
+        style: { padding: '8px 10px', border: '1px solid ' + C.line, borderRadius: 10, background: C.bg2 || 'transparent' },
       },
-        h('span', { style: { color: C.text3, flex: '0 0 auto', minWidth: 56 } }, k),
-        h('span', { style: { minWidth: 0, wordBreak: 'break-all' } }, v || '—'),
+        h('div', { style: { fontSize: 11.5, color: C.text3, marginBottom: 2 } }, k),
+        h('div', { style: { fontSize: 13, fontWeight: 600, color: tone || C.text, wordBreak: 'break-all' } }, v || '—'),
       );
       if (!s) {
         return h(Card, { title: '运行状态' },
@@ -144,17 +146,25 @@ window.__ModuleLoader__.load({
       const running = !!s.enabled;
       const bad = !!s.lastError;
       const color = bad ? '#c0392b' : (running ? '#2e7d32' : 'rgba(120,125,135,0.55)');
+      const quota = q || {};
+      const quotaTxt = quota.perHour ? `${quota.hour || 0}/${quota.perHour} 条·时　${quota.day || 0}/${quota.perDay} 条·天` : '';
+      const signedTxt = s.signed ? (s.signedDeps ? '可用（走快路）' : '缺依赖，会退回页面') : '未安装（走页面）';
+      const signedTone = s.signed && s.signedDeps ? '#2e7d32' : (s.signed ? '#b26a00' : 'rgba(120,125,135,0.75)');
       return h(Card, { title: '运行状态' },
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0 6px' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0 10px' } },
           h('span', { style: { width: 8, height: 8, borderRadius: 4, background: color, flex: '0 0 auto' } }),
           h('span', { style: { fontSize: 13, fontWeight: 600, color: bad ? '#c0392b' : C.text } },
             bad ? '出错' : (running ? '运行中' : '已停止')),
           h('span', { style: { fontSize: 12, color: C.text3 } },
             running ? `盯 ${s.bound || 0} 个会话` : '不读消息、不唤醒'),
         ),
-        row('最后读取', s.lastRead ? `${s.lastRead}（${s.lastCount || 0} 条）` : ''),
-        row('最后唤醒', s.lastWake || '无'),
-        bad ? row('错误', s.lastError) : null,
+        h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 } },
+          cell('今日评论额度', quotaTxt),
+          cell('最后读取', s.lastRead ? `${s.lastRead}（${s.lastCount || 0} 条）` : '还没读过'),
+          cell('签名直连', signedTxt, signedTone),
+          cell('最后唤醒', s.lastWake || '无'),
+        ),
+        bad ? h('div', { style: { fontSize: 12, color: '#c0392b', marginTop: 8 } }, '错误：' + s.lastError) : null,
       );
     }
 
@@ -223,7 +233,41 @@ window.__ModuleLoader__.load({
         );
       };
 
-      return h('div', { style: { padding: '4px 0 16px' } },
+      // 左侧锚点没有位置放，就做一排「吸顶快捷跳转」：九组内容太长，靠它少滚两屏
+      const SECTIONS = ['私信哨兵', '自动刷视频', '人设', '公开评论', '评论区自动回', '我的作品', '维护'];
+      const jumpTo = (label) => {
+        try {
+          const root = document.querySelector('[data-dy-panel]') || document.body;
+          const nodes = Array.prototype.slice.call(root.querySelectorAll('div,span,h3,h4,p'));
+          // 卡片标题有两种写法：「公开评论（评论区专用）」「评论区自动回（可选）」，
+          //   所以不能全等匹配，用「前缀相同 + 长度别差太多」来找，取最里层那个真正带标题的节点。
+          const cand = nodes.filter((n) => {
+            const t = String(n.innerText || '').trim();
+            return t.indexOf(label) === 0 && t.length <= label.length + 14;
+          });
+          const hit = cand[cand.length - 1] || null;
+          if (hit && hit.scrollIntoView) hit.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          return !!hit;
+        } catch { return false; /* 跳转失败不影响使用 */ }
+      };
+
+      return h('div', { 'data-dy-panel': '1', style: { padding: '4px 0 16px' } },
+
+        h('div', {
+          style: {
+            position: 'sticky', top: 0, zIndex: 5, display: 'flex', flexWrap: 'wrap',
+            gap: 6, padding: '6px 0 8px', marginBottom: 2,
+            background: C.card || 'transparent',
+          },
+        },
+          ...SECTIONS.map((label) => h('button', {
+            key: label, type: 'button', onClick: () => jumpTo(label),
+            style: {
+              fontSize: 12, padding: '4px 9px', borderRadius: 999, cursor: 'pointer',
+              border: '1px solid ' + C.line, background: 'transparent', color: C.text2,
+            },
+          }, label)),
+        ),
 
         h('div', {
           style: {
@@ -239,7 +283,7 @@ window.__ModuleLoader__.load({
           h(Switch, { checked: !!cfg.enabled, onChange: (v) => save({ enabled: v }) }),
         ),
 
-        h(StatusCard, { s: status }),
+        h(StatusCard, { s: status, q: cfg.commentQuota }),
 
         h(Card, { title: '私信哨兵' },
           h(Row, { label: '主人' },
@@ -412,8 +456,21 @@ window.__ModuleLoader__.load({
           ),
         ),
         h(Card, { title: '评论区自动回（可选）' },
-          h(Row, { label: '自动回评论', hint: '打开后每 N 分钟看一次互动通知，把「还没回过、且在时限内」的挑出来叫我回评；默认关 —— 开了就是公开回复，自己掂量' },
+          h(Row, { label: '自动回评论', hint: '总开关；关掉下面两项都不跑。开了就是公开回复，自己掂量' },
             h(Switch, { checked: !!cfg.commentAutoReply, onChange: (v) => save({ commentAutoReply: v }) }),
+          ),
+          // 2026-10-28 按主人要求拆成两类：自己作品下（正常互动）/ 别人视频下（容易被当刷屏）
+          h(Row, { label: '回自己作品下的评论', hint: '别人在我发的作品底下留言 → 我去回；这是正常互动，默认开' },
+            h(Switch, {
+              checked: cfg.commentAutoReplyWork !== false,
+              onChange: (v) => save({ commentAutoReplyWork: v }),
+            }),
+          ),
+          h(Row, { label: '回别人视频下的楼中楼', hint: '有人回复了我的评论（在别人作品下）→ 我去接；容易被当刷屏，默认关' },
+            h(Switch, {
+              checked: !!cfg.commentAutoReplyOthers,
+              onChange: (v) => save({ commentAutoReplyOthers: v }),
+            }),
           ),
           h(Row, { label: '扫描间隔', hint: '分钟；太短会频繁读页面' },
             h('input', {
@@ -537,6 +594,17 @@ window.__ModuleLoader__.load({
               style: Object.assign({}, ctlBase, { width: 'auto', padding: '0 12px', cursor: cleaning ? 'default' : 'pointer', color: C.text2 }),
             }, cleaning ? '清理中…' : '清理缓存'),
           ),
+        ),
+
+        // 结尾这张卡：真诚求个星（不弹窗、不打扰，就一个小按钮）
+        h(Card, { title: '觉得好用？' },
+          h('div', { style: { fontSize: 12, color: C.text2, lineHeight: '21px' } },
+            '要是这条赛博小鱼帮你省了点事，去仓库给它点个星吧。星星多一点，愿意一起修问题、加功能的人也会多一点，它才能活得更久。'),
+          h('button', {
+            type: 'button',
+            onClick: () => { try { window.open('https://github.com/miqian-nomad/dsh-douyin-watch', '_blank') } catch { /* 打不开就算了 */ } },
+            style: Object.assign({}, ctlBase, { width: 'auto', marginTop: 8, padding: '0 12px', cursor: 'pointer', color: C.text }),
+          }, '去 GitHub 点个星'),
         ),
 
         note ? h('div', { style: { marginTop: 12, fontSize: 12, color: C.text3 } }, note) : null,

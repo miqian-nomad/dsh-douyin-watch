@@ -141,6 +141,10 @@ const DEFAULTS = {
   //   开了之后，每 commentScanMinutes 分钟看一眼互动通知（type 31/35/45/46），
   //   把"还没回过、又不太旧"的挑出来叫醒 agent，由它逐条用 douyin_comment 回评。
   commentAutoReply: false,
+  // 2026-10-28 按主人要求拆成两类（总开关 commentAutoReply 仍然管全局）：
+  //   ①自己作品下的评论（正常互动，默认开）②别人视频下"有人回复了我的评论"（容易被当刷屏，默认关）
+  commentAutoReplyWork: true,
+  commentAutoReplyOthers: false,
   commentScanMinutes: 10,
   commentMaxPerRound: 3,             // 一次最多丢几条给 agent（别一口气 20 条）
   commentNoticeMaxAgeHours: 48,      // 超过这个时长的旧通知不再回（避免翻旧账）
@@ -376,7 +380,7 @@ export function apply(ctx, config) {
   const toolDisposers = [] // 每个工具注册返回的卸载函数；插件卸载时一起清掉，避免热重载撞「already registered」
 
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
-  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaShort', 'personaFull', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
+  const TOGGLE_KEYS = ['enabled', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaShort', 'personaFull', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -409,7 +413,17 @@ export function apply(ctx, config) {
             return j && j.mode === 'headed' ? 'headed' : 'headless'
           } catch { return 'headless' }
         }
-        const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; o.browserMode = browserModeNow(); const hm = (t) => (t ? new Date(t).toLocaleTimeString(undefined, { hour12: false }) : String()); o.status = { enabled: !!cfg.enabled, bound: watched.size, lastRead: hm(runtime.lastReadAt), lastCount: runtime.lastCount, lastFresh: runtime.lastFresh, lastWake: hm(runtime.lastWakeAt), lastError: runtime.lastError, line: '哨兵：' + (cfg.enabled ? '运行中' : '已停止') + (watched.size ? '（盯 ' + watched.size + ' 个会话）' : String()) + ' · 最后读取 ' + hm(runtime.lastReadAt) + '（' + runtime.lastCount + ' 条） · 最后唤醒 ' + (hm(runtime.lastWakeAt) || '无') + (cfg.enabled ? String() : ' · 已停靠页面，不再回执已读') + (runtime.lastError ? ' · 错误：' + runtime.lastError : String()) }; o.commentQuota = guardStats({ perHour: cfg.commentPerHour, perDay: cfg.commentPerDay }); o.commentScan = runtime.lastCommentScan || null; return o }
+        const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; o.browserMode = browserModeNow(); const hm = (t) => (t ? new Date(t).toLocaleTimeString(undefined, { hour12: false }) : String()); o.status = { enabled: !!cfg.enabled, bound: watched.size, lastRead: hm(runtime.lastReadAt), lastCount: runtime.lastCount, lastFresh: runtime.lastFresh, lastWake: hm(runtime.lastWakeAt), lastError: runtime.lastError, line: '哨兵：' + (cfg.enabled ? '运行中' : '已停止') + (watched.size ? '（盯 ' + watched.size + ' 个会话）' : String()) + ' · 最后读取 ' + hm(runtime.lastReadAt) + '（' + runtime.lastCount + ' 条） · 最后唤醒 ' + (hm(runtime.lastWakeAt) || '无') + (cfg.enabled ? String() : ' · 已停靠页面，不再回执已读') + (runtime.lastError ? ' · 错误：' + runtime.lastError : String()) };
+        // 签名直连可用性（2026-10-28）：设置页状态卡要能一眼看出"快路"在不在
+        //   ① 脚本：$DOUYIN_SIGN_SCRIPT 或 _deps\scripts\douyin-signer\signed_get.py
+        //   ② 依赖：_deps\python 下的 curl_cffi + cryptography（缺了签名脚本会 ImportError）
+        try {
+          const signScript = String(process.env.DOUYIN_SIGN_SCRIPT || 'D:\\dsh-plugins\\_deps\\scripts\\douyin-signer\\signed_get.py')
+          const pyRoot = String(process.env.DOUYIN_DEPS_PYTHON || 'D:\\dsh-plugins\\_deps\\python')
+          o.status.signed = existsSync(signScript)
+          o.status.signedDeps = existsSync(join(pyRoot, 'curl_cffi')) && existsSync(join(pyRoot, 'cryptography'))
+        } catch { o.status.signed = false; o.status.signedDeps = false }
+        o.commentQuota = guardStats({ perHour: cfg.commentPerHour, perDay: cfg.commentPerDay }); o.commentScan = runtime.lastCommentScan || null; return o }
         const pathname = (req.url || '').split('?')[0]
         // GET /api/douyin-watch/sessions —— 给设置页的「钉死会话」选择器（只读）
         //   优先问 DSH 自己的会话服务（就是 GUI 会话列表那份数据）；拿不到再扫 ~/.dsh/sessions 目录。
@@ -662,6 +676,10 @@ export function apply(ctx, config) {
    */
   async function maybeScanComments(agent) {
     if (!cfg.commentAutoReply) return
+    // 2026-10-28：两类分开管。总开关关着就什么都不做；开着再按这两个细分开关决定读哪一路。
+    const doWork = cfg.commentAutoReplyWork !== false
+    const doOthers = !!cfg.commentAutoReplyOthers
+    if (!doWork && !doOthers) return
     const everyMs = Math.max(5, Number(cfg.commentScanMinutes) || 10) * 60e3
     if (Date.now() - Number(runtime.lastCommentScanAt || 0) < everyMs) return
     runtime.lastCommentScanAt = Date.now()
@@ -690,7 +708,7 @@ export function apply(ctx, config) {
       let workSelfNick = ''            // 自己作品的作者昵称（= 本账号），用来排掉"我自己发的评论"
       const unreachable = new Set()    // 发了但服务端看不见的线程（机器人/平台提示类评论）
       const workIds = known.slice(0, 3) // 一次最多看 3 个作品，别把页面读爆
-      if (workIds.length) {
+      if (doWork && workIds.length) {
         const perWork = Math.max(10, (Number(cfg.commentMaxPerRound) || 3) * 4)
         // 作品发布超过 N 天的整条跳过（0 = 不限）：别去翻几个月前的旧账
         const workAgeArgs = ['--max-work-age-days', String(Number(cfg.commentWorkMaxAgeDays) || 0)]
@@ -764,9 +782,9 @@ export function apply(ctx, config) {
         if (wr.parsed && wr.parsed.error) log('读作品评论失败：' + wr.parsed.error)
       }
 
-      // ③ 合并：自己作品下的评论 + 通知里「别人回复我评论」的那类
+      // ③ 合并：自己作品下的评论（doWork） + 通知里「别人回复我评论」的那类（doOthers）
       //    （type 35/46 已经由评论列表覆盖了，这里只留 31/45 免得重复）
-      const fromNotice = noticeItems.filter((it) => [31, 45].includes(Number(it.type)))
+      const fromNotice = doOthers ? noticeItems.filter((it) => [31, 45].includes(Number(it.type))) : []
       const items = [...workItems, ...fromNotice]
       if (!items.length) { runtime.lastCommentScan = { at: Date.now(), items: 0, works: workIds.length, added: addedWorks, picked: 0 }; return }
 
