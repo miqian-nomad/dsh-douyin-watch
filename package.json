@@ -1,7 +1,7 @@
 {
   "name": "dsh-douyin-watch",
-  "version": "0.4.5",
-  "description": "Douyin (抖音) automation for DeepSeek Harness: watch private messages and wake the agent event-driven, plus 10 tools (read DM, send DM, comment, @ mention, reply, delete comment, read notice, share video card, pick feed candidates, cookie backup/restore) — all through one headless Chrome with anti-detection, no dependency on the DSH browser service.",
+  "version": "0.4.6",
+  "description": "让大肥鱼活在抖音上：新私信叫醒 agent，能回私信、发评论、回楼中楼、读通知、分析视频；带频率上限、去重和发完核对。",
   "license": "MIT",
   "type": "module",
   "exports": {
