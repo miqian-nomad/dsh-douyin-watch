@@ -523,6 +523,14 @@ window.__ModuleLoader__.load({
               style: Object.assign({}, ctlBase, { width: 380 }),
             }),
           ),
+          // 2026-10-28：明确显示"记住了几个作品"+ 每个作品一行，别再让人猜
+          h('div', { style: { fontSize: 12, color: C.text3, paddingTop: 6, lineHeight: '20px' } },
+            (() => {
+              const list = String(cfg.myWorks || '').split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean)
+              if (!list.length) return '已记住作品：0 个（还没有——收到作品评论通知会自动记住，或手动填 id）'
+              return '已记住作品：' + list.length + ' 个 · ' + list.slice(0, 3).map((x) => x.replace(/^.*\/video\//, '')).join('、') + (list.length > 3 ? ' …' : '')
+            })(),
+          ),
           cfg.commentScan
             ? h('div', { style: { fontSize: 12, color: C.text3, paddingTop: 6 } },
                 '上次扫描：' + new Date(cfg.commentScan.at).toLocaleTimeString(undefined, { hour12: false }) +
