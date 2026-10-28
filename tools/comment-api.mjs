@@ -15,7 +15,8 @@
  *
  * 输出一行 JSON：{ ok, http, cid, reply_to, text, raw? , error? }
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { openPage, sleep } from '../lib/chrome.mjs'
 
 const argv = process.argv.slice(2)
@@ -304,9 +305,43 @@ try {
   }
 
   const cid = String(res.cid || '')
+
+  /**
+   * 🔴 2026-10-28 事故补丁：服务端回 200 却没给 cid 时**不要直接判失败**。
+   *   那天就是因为报「没拿到 cid」→ 当成失败重发了一次 → 出现两条一模一样的回复。
+   *   现在：立刻用签名直连把对应列表读一遍，按「同一段文字 + 最近 15 分钟」找回自己这条，
+   *   找到就把 cid 补回来（台账能记账、去重闸也能生效，人也不会再手贱重发）。
+   */
+  function verifyByText() {
+    try {
+      const py = process.env.DOUYIN_SIGN_PY || 'D:\\dsh-plugins\\_deps\\python311\\cpython-3.11-windows-x86_64-none\\python.exe'
+      const script = process.env.DOUYIN_SIGN_SCRIPT || 'D:\\dsh-plugins\\_deps\\scripts\\douyin-signer\\signed_get.py'
+      if (!existsSync(py) || !existsSync(script)) return ''
+      const norm = (s) => String(s || '').replace(/\s+/g, '').slice(0, 60)
+      const want = norm(res.text || TEXT)
+      const isReply = !!REPLY
+      const path = isReply ? '/aweme/v1/web/comment/list/reply/' : '/aweme/v1/web/comment/list/'
+      const kind = isReply ? 'replies' : 'comments'
+      const q = isReply
+        ? `device_platform=webapp&aid=6383&channel=channel_pc_web&item_id=${AWEME}&comment_id=${REPLY}&cursor=0&count=50&item_type=0&app_name=aweme`
+        : `device_platform=webapp&aid=6383&channel=channel_pc_web&aweme_id=${AWEME}&cursor=0&count=50&item_type=0&app_name=aweme`
+      const rr = spawnSync(py, [script, '--kind', kind, '--path', path, '--query', q], { encoding: 'utf8', timeout: 45000 })
+      const p = JSON.parse(String(rr.stdout || '').trim())
+      const now = Date.now() / 1000
+      for (const it of (p.items || [])) {
+        if (norm(it.text) !== want) continue
+        if (it.at && now - Number(it.at) > 900) continue   // 只认 15 分钟内发的
+        return String(it.cid || '')
+      }
+      return ''
+    } catch { return '' }
+  }
+
+  const verifiedCid = (!cid && Number(res.http) === 200) ? verifyByText() : ''
+  const finalCid = cid || verifiedCid
   // 落点只是"看到没看到"，**不是成败判据**：接口翻页看不到 ≠ 没发出去（已被用户截图纠正一次）
   const landed = res.landed === undefined ? null : !!res.landed
-  const ok = res.http === 200 && !!cid
+  const ok = res.http === 200 && !!finalCid
   const mentionNote = res.mention
     ? (res.mention.uid && res.mention.sec ? `@${res.mention.name}(uid=${res.mention.uid})` : `@${res.mention.name || '?'}（没凑齐 uid/sec_uid）`)
     : ''
@@ -314,7 +349,8 @@ try {
   out({
     ok,
     http: res.http,
-    cid: cid || undefined,
+    cid: finalCid || undefined,
+    verified: verifiedCid ? true : undefined,
     reply_to: REPLY || '(顶层评论)',
     reply_to_reply: REPLY_TO_REPLY || undefined,
     landed: landed === null ? undefined : landed,        // 回评落点自检
