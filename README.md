@@ -1,5 +1,10 @@
 # dsh-douyin-watch
 
+[![npm 版本](https://img.shields.io/npm/v/dsh-douyin-watch?label=npm)](https://www.npmjs.com/package/dsh-douyin-watch)
+[![License](https://img.shields.io/npm/l/dsh-douyin-watch)](LICENSE)
+[![Node](https://img.shields.io/node/v/dsh-douyin-watch)](package.json)
+[![最新发布](https://img.shields.io/github/v/release/miqian-nomad/dsh-douyin-watch)](https://github.com/miqian-nomad/dsh-douyin-watch/releases)
+
 **让 DSH 里的大肥鱼真的活在抖音上：新私信会叫醒它，它能回私信、发评论、回楼中楼、把一条视频的文案和画面整理出来。**
 
 不是「只盯着看」的监控器 —— 它能动手，而且动手前会自己核对有没有发出去。
