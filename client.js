@@ -67,8 +67,15 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function Card({ title, children }) {
-      return h('div', { style: { marginTop: 14 } },
+    // anchor：给卡片一个稳定锚点（吸顶快捷跳转用），别靠猜标题文字。
+    //   2026-10-28 踩过：原来按 innerText 前缀匹配，卡片里的行标签（如「公开评论语气」）
+    //   也会命中，结果跳到卡片中间。
+    function Card({ title, anchor, children }) {
+      return h('div', {
+        'data-dysec': anchor || undefined,
+        id: anchor ? 'dysec-' + anchor : undefined,
+        style: { marginTop: 14, scrollMarginTop: 46 },
+      },
         h('div', { style: { fontSize: 12.5, fontWeight: 600, color: C.text2, margin: '2px 0 8px 2px' } }, title),
         h('div', {
           style: {
@@ -233,21 +240,23 @@ window.__ModuleLoader__.load({
         );
       };
 
-      // 左侧锚点没有位置放，就做一排「吸顶快捷跳转」：九组内容太长，靠它少滚两屏
-      const SECTIONS = ['私信哨兵', '自动刷视频', '人设', '公开评论', '评论区自动回', '我的作品', '维护'];
-      const jumpTo = (label) => {
+      // 吸顶快捷跳转：只跳卡片，靠 **稳定锚点**（data-dysec），别再按标题文字猜。
+      //   2026-10-28 踩过：按 innerText 前缀匹配时，卡片里的行标签（「公开评论语气」）
+      //   也会命中，结果跳到卡片中间 —— 就是主人说的"跳转有问题"。
+      const SECTIONS = [
+        { label: '私信哨兵', anchor: 'mail' },
+        { label: '自动刷视频', anchor: 'autoscroll' },
+        { label: '人设', anchor: 'persona' },
+        { label: '公开评论', anchor: 'public' },
+        { label: '评论区自动回', anchor: 'autoreply' },
+        { label: '维护', anchor: 'maint' },
+      ];
+      const jumpTo = (anchor) => {
         try {
-          const root = document.querySelector('[data-dy-panel]') || document.body;
-          const nodes = Array.prototype.slice.call(root.querySelectorAll('div,span,h3,h4,p'));
-          // 卡片标题有两种写法：「公开评论（评论区专用）」「评论区自动回（可选）」，
-          //   所以不能全等匹配，用「前缀相同 + 长度别差太多」来找，取最里层那个真正带标题的节点。
-          const cand = nodes.filter((n) => {
-            const t = String(n.innerText || '').trim();
-            return t.indexOf(label) === 0 && t.length <= label.length + 14;
-          });
-          const hit = cand[cand.length - 1] || null;
-          if (hit && hit.scrollIntoView) hit.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          return !!hit;
+          const el = document.getElementById('dysec-' + anchor)
+            || (document.querySelector('[data-dy-panel]') || document).querySelector('[data-dysec="' + anchor + '"]');
+          if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          return !!el;
         } catch { return false; /* 跳转失败不影响使用 */ }
       };
 
@@ -260,13 +269,13 @@ window.__ModuleLoader__.load({
             background: C.card || 'transparent',
           },
         },
-          ...SECTIONS.map((label) => h('button', {
-            key: label, type: 'button', onClick: () => jumpTo(label),
+          ...SECTIONS.map((s) => h('button', {
+            key: s.anchor, type: 'button', onClick: () => jumpTo(s.anchor),
             style: {
               fontSize: 12, padding: '4px 9px', borderRadius: 999, cursor: 'pointer',
               border: '1px solid ' + C.line, background: 'transparent', color: C.text2,
             },
-          }, label)),
+          }, s.label)),
         ),
 
         h('div', {
@@ -285,7 +294,7 @@ window.__ModuleLoader__.load({
 
         h(StatusCard, { s: status, q: cfg.commentQuota }),
 
-        h(Card, { title: '私信哨兵' },
+        h(Card, { title: '私信哨兵', anchor: 'mail' },
           h(Row, { label: '主人' },
             h('span', { style: { fontSize: 13, color: C.text2 } }, cfg.peer || '（未配置）'),
           ),
@@ -323,7 +332,7 @@ window.__ModuleLoader__.load({
           ),
         ),
 
-        h(Card, { title: '自动刷视频' },
+        h(Card, { title: '自动刷视频', anchor: 'autoscroll' },
           h(Row, { label: '开启自动刷视频', hint: '关掉就完全不跑' }, h(Switch, { checked: !!cfg.autoScrollEnabled, onChange: (v) => save({ autoScrollEnabled: v }) })),
           h('div', { style: { padding: '10px 0 6px' } },
             h('div', { style: { fontSize: 13, color: C.text } }, '自动跑的时间段'),
@@ -367,7 +376,7 @@ window.__ModuleLoader__.load({
             }),
           ),
         ),
-        h(Card, { title: '人设' },
+        h(Card, { title: '人设', anchor: 'persona' },
           h(Row, { label: '一行短人设', hint: '跟着每次唤醒走，建议 ≤60 字（每轮都带，别写长）' },
             h('input', {
               value: cfg.personaShort || '',
@@ -407,7 +416,7 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
-        h(Card, { title: '公开评论（评论区专用）' },
+        h(Card, { title: '公开评论（评论区专用）', anchor: 'public' },
           h('div', { style: { padding: '0 0 4px' } },
             h('div', { style: { fontSize: 13, color: C.text } }, '公开评论语气'),
             h('div', { style: { fontSize: 12, color: C.text3, marginTop: 2 } }, '跟上面的人设分开：评论区是公开的，别把私信里的称呼（主人 / 卖萌动作）搬过去；留空 = 不加额外要求'),
@@ -455,7 +464,7 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
-        h(Card, { title: '评论区自动回（可选）' },
+        h(Card, { title: '评论区自动回（可选）', anchor: 'autoreply' },
           h(Row, { label: '自动回评论', hint: '总开关；关掉下面两项都不跑。开了就是公开回复，自己掂量' },
             h(Switch, { checked: !!cfg.commentAutoReply, onChange: (v) => save({ commentAutoReply: v }) }),
           ),
@@ -539,7 +548,7 @@ window.__ModuleLoader__.load({
                 (cfg.commentScan.added ? '（新记住 ' + cfg.commentScan.added + ' 个）' : ''))
             : null,
         ),
-        h(Card, { title: '维护' },
+        h(Card, { title: '维护', anchor: 'maint' },
           h(Row, { label: '浏览器模式', hint: '要过验证码就点右边那个按钮——它会切成有头、并直接跳到会弹滑块的视频页；过完切回「无头」' },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               h('select', {
