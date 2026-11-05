@@ -7,14 +7,17 @@
  * 视频页自己会去拉 douyinvod 的流 —— 截下来喂给技能就行（`--url` 显式入口）。
  *
  * 链路：media-urls.mjs 截直链 → python douyin_downloader.py --url … --json → 落盘
- *   产出：<out>/transcript.md、<out>/contact_sheet.jpg
+ *   产出：<out>/transcript.md、<out>/contact_sheet.jpg、<out>/subtitle_ocr.md
  *
  * 用法:
  *   node tools/analyze-video.mjs --aweme <id>
  *   node tools/analyze-video.mjs --link "https://www.douyin.com/video/<id>"
+ *   node tools/analyze-video.mjs --video <本地文件>
+ *   （默认不做硬字幕 OCR；需要逐句精确的字幕时加 --ocr，会多花几分钟 CPU）
  *
  * 输出一行 JSON：{ ok, aweme_id, title, duration_s, language, text_chars,
- *                  transcript, contact_sheet, out_dir, preview, steps, error? }
+ *                  transcript, contact_sheet, subtitle_ocr, subtitle_count,
+ *                  out_dir, preview, steps, error? }
  */
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
@@ -113,8 +116,13 @@ try {
   const py = pythonBin()
   const outDir = join(homeDir(), 'douyin_out', VIDEO_IN ? 'local' : AWEME)
   const pageUrl = `https://www.douyin.com/video/${AWEME}`
+  // 2026-11-05：硬字幕以前靠视觉模型看联系表来"读"，实测会编字
+  //  （「诸葛亮也太啰嗦了」→「莽撞」）。OCR 能逐句准确、带时间轴地读出来，
+  //  但代价是纯 CPU 逐帧识别，一条 2 分钟的视频要多花约 5 分钟满载。
+  //  插件是给别人用的，别人机器不一定扛得住 → 默认关，需要精确字幕时加 --ocr 才跑。
+  const ocrArgs = argv.includes('--ocr') ? ['--subtitle-ocr'] : []
   const pargs = VIDEO_IN
-    ? [join(sd, 'scripts', 'douyin_downloader.py'), '--video', VIDEO_IN, '--out-dir', outDir, '--json']
+    ? [join(sd, 'scripts', 'douyin_downloader.py'), '--video', VIDEO_IN, '--out-dir', outDir, '--json', ...ocrArgs]
     : [
       join(sd, 'scripts', 'douyin_downloader.py'),
       '--link', pageUrl,
@@ -122,10 +130,20 @@ try {
       ...(media.audio ? ['--audio-url', media.audio] : []),
       '--out-dir', outDir,
       '--json',
+      ...ocrArgs,
     ]
   const pr = await run(py, pargs, 8 * 60 * 1000)
   const res = pickJSON(pr.stdout)
   steps.asr = res ? { ok: true, language: res.language, chars: String(res.text || '').length, frames: res.frame_count } : { ok: false }
+  if (res && res.subtitle_ocr) {
+    steps.ocr = {
+      ok: !!res.subtitle_ocr.ok,
+      segments: res.subtitle_ocr.segment_count ?? 0,
+      frames: res.subtitle_ocr.frames_ocr,
+      elapsed: res.subtitle_ocr.elapsed,
+      error: res.subtitle_ocr.error,
+    }
+  }
 
   // ⚠️ 2026-10-25 修：**「视频没人声」≠「ASR 出故障」**。
   //   抖音上很多视频只有 BGM / 只有表情包字幕，whisper 转出来就是空字符串。
@@ -147,6 +165,10 @@ try {
   const noSpeech = text.trim().length === 0
   const transcript = res.transcript || join(outDir, 'transcript.md')
   const sheet = res.contact_sheet || join(outDir, 'contact_sheet.jpg')
+  // 硬字幕 OCR 结果：ASR 是"听"到的，这份是"看"到的，两条线互为校验
+  const subOcr = res.subtitle_ocr || null
+  const subPath = res.subtitle_ocr_path || null
+  const subCount = Number((subOcr && subOcr.segment_count) || 0)
   // 走 --url 显式入口时技能拿不到作品标题，会写成 direct_url/local_url；
   // 这时用详情接口给的 title 顶上（唤醒消息里那条卡片的文案也是同一句）
   const rawTitle = String(res.title || '')
@@ -165,12 +187,17 @@ try {
     transcript,
     contact_sheet: sheet,
     out_dir: res.out_dir || outDir,
+    // 画面硬字幕（OCR）：需要准确字幕、或者 ASR 听岔时以这份为准
+    subtitle_ocr: subPath || undefined,
+    subtitle_count: subCount || undefined,
     // 没人声：别当成失败，但也别假装有文案 —— 明确标出来，让调用方改走画面路线
     no_speech: noSpeech || undefined,
     hint: noSpeech
-      ? (frames > 0
-        ? `没检测到人声（大概只有 BGM / 字幕表情），画面已抽成 ${frames} 帧：看 contact_sheet.jpg`
-        : '没检测到人声，而且这次也没抽到帧')
+      ? (subCount > 0
+        ? `没检测到人声，但画面有 ${subCount} 句硬字幕：读 ${subPath}`
+        : (frames > 0
+          ? `没检测到人声（大概只有 BGM / 字幕表情），画面已抽成 ${frames} 帧：看 contact_sheet.jpg`
+          : '没检测到人声，而且这次也没抽到帧'))
       : undefined,
     // 只回前 160 字，正文让调用方读 transcript.md（省 token）
     preview: text.replace(/\s+/g, ' ').slice(0, 160),

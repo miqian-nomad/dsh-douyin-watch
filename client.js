@@ -52,6 +52,13 @@ window.__ModuleLoader__.load({
       fontSize: 13, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box',
     };
 
+    // 人设列表里那种小按钮（比输入框矮一档，跟行高对齐）
+    const btnBase = {
+      height: 26, borderRadius: 6, border: '1px solid ' + C.line, background: 'transparent',
+      color: C.text2, padding: '0 8px', fontSize: 12, fontFamily: 'inherit',
+      cursor: 'pointer', whiteSpace: 'nowrap',
+    };
+
     function Row({ label, hint, children }) {
       return h('div', {
         style: {
@@ -181,8 +188,117 @@ window.__ModuleLoader__.load({
       const [note, setNote] = useState('');
       const [status, setStatus] = useState(null);
       const [cleaning, setCleaning] = useState(false);
-      const [injecting, setInjecting] = useState(false);
       const [switching, setSwitching] = useState(false);
+      const [personas, setPersonas] = useState(null);
+      const [pNote, setPNote] = useState('');
+      const [pOpen, setPOpen] = useState(null);   // 查看全文：{ id, name, text }
+      const [pEdit, setPEdit] = useState(null);   // 改名中：{ id, name }
+      const [pDraft, setPDraft] = useState({ name: '', text: '' }); // 导入草稿
+
+      // 人设库（内置三套只读 + 导入的可编辑），列表只拿元数据，正文按需取
+      const loadPersonas = () => fetch('/api/douyin-watch/personas')
+        .then((r) => r.json())
+        .then((d) => { if (d && d.ok) setPersonas(d); })
+        .catch(() => {});
+
+      // 人设库动作：选当前 / 导入 / 删除 / 启停
+      const mutatePersonas = (body) => fetch('/api/douyin-watch/personas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+        .then((r) => r.json())
+        .then((d) => {
+          if (d && d.ok) { setPNote(''); loadPersonas(); load(); return true; }
+          setPNote('操作失败：' + ((d && d.error) || '未知'));
+          return false;
+        })
+        .catch((e) => { setPNote('操作失败：' + (e && e.message ? e.message : e)); return false; });
+
+      // 查看全文：正文按需拉，列表里只有字数
+      const viewPersona = (p) => {
+        if (pOpen && pOpen.id === p.id) { setPOpen(null); return; }
+        setPOpen({ id: p.id, name: p.name, text: '读取中…' });
+        const keep = (text) => setPOpen((cur) => (cur && cur.id === p.id ? { id: p.id, name: p.name, text } : cur));
+        fetch('/api/douyin-watch/personas?id=' + encodeURIComponent(p.id))
+          .then((r) => r.json())
+          .then((d) => keep(d && d.ok ? d.text : ('读取失败：' + ((d && d.error) || '未知'))))
+          .catch(() => keep('读取失败：接口没返回'));
+      };
+
+      const commitRename = (id) => {
+        const name = String((pEdit && pEdit.name) || '').trim();
+        if (!name) { setPNote('名字不能为空'); return; }
+        setPEdit(null);
+        mutatePersonas({ action: 'rename', id, name });
+      };
+
+      const submitImport = () => {
+        const name = String(pDraft.name || '').trim();
+        const text = String(pDraft.text || '').trim();
+        if (!name || !text) { setPNote('名字和正文都要填'); return; }
+        mutatePersonas({ action: 'import', name, text }).then((ok) => {
+          if (ok) setPDraft({ name: '', text: '' });
+        });
+      };
+
+      // 一条人设：名字 + 来源/字数 + 操作按钮（内置的只有「设为当前 / 全文」）
+      const personaRow = (p) => {
+        const isCur = (cfg.personaPreset || '') === p.id;
+        const editing = !!pEdit && pEdit.id === p.id;
+        return h('div', {
+          key: p.id,
+          style: {
+            display: 'flex', alignItems: 'center', gap: 8, minHeight: 34,
+            padding: '4px 0', borderTop: '1px solid ' + C.line,
+          },
+        },
+          editing
+            ? h('input', {
+                value: pEdit.name, autoFocus: true,
+                onChange: (e) => setPEdit({ id: p.id, name: e.target.value }),
+                onKeyDown: (e) => {
+                  if (e.key === 'Enter') commitRename(p.id);
+                  if (e.key === 'Escape') setPEdit(null);
+                },
+                style: Object.assign({}, ctlBase, { flex: 1, height: 26, fontSize: 12 }),
+              })
+            : h('div', { style: { flex: 1, minWidth: 0 } },
+                h('span', { style: { fontSize: 13, color: p.enabled === false ? C.text3 : C.text } }, p.name),
+                h('span', { style: { fontSize: 11, color: C.text3, marginLeft: 8 } },
+                  (p.builtin ? '内置' : '导入') + ' · ' + p.chars + ' 字' + (p.enabled === false ? ' · 已停用' : '')),
+              ),
+          h('div', { style: { display: 'flex', gap: 6, flex: '0 0 auto' } },
+            isCur
+              ? h('span', { style: { fontSize: 11, color: C.text3, padding: '0 4px' } }, '当前')
+              : h('button', {
+                  type: 'button', style: btnBase,
+                  onClick: () => mutatePersonas({ action: 'set-current', id: p.id }),
+                }, '设为当前'),
+            h('button', {
+              type: 'button', style: btnBase,
+              onClick: () => viewPersona(p),
+            }, !!pOpen && pOpen.id === p.id ? '收起' : '全文'),
+            p.builtin ? null : (editing
+              ? h('button', { type: 'button', style: btnBase, onClick: () => commitRename(p.id) }, '确定')
+              : h('button', {
+                  type: 'button', style: btnBase,
+                  onClick: () => setPEdit({ id: p.id, name: p.name }),
+                }, '改名')),
+            p.builtin ? null : h('button', {
+              type: 'button', style: btnBase,
+              onClick: () => mutatePersonas({ action: 'set-enabled', id: p.id, enabled: p.enabled === false }),
+            }, p.enabled === false ? '启用' : '停用'),
+            p.builtin ? null : h('button', {
+              type: 'button', style: Object.assign({}, btnBase, { color: '#c0392b' }),
+              onClick: () => {
+                if (!window.confirm('删掉「' + p.name + '」？库里的正文会一起没了，找不回来。')) return;
+                mutatePersonas({ action: 'remove', id: p.id });
+              },
+            }, '删除'),
+          ),
+        );
+      };
 
       const load = () => fetch('/api/douyin-watch/config')
         .then((r) => r.json())
@@ -195,6 +311,7 @@ window.__ModuleLoader__.load({
         .catch(() => setNote('读配置失败：接口没返回（宿主报错，见 DSH 日志）'));
       useEffect(() => {
         load();
+        loadPersonas();
         const tick = () => fetch('/api/douyin-watch/config')
           .then((r) => r.json())
           .then((d) => setStatus(((d.config || {}).status) || null))
@@ -259,6 +376,30 @@ window.__ModuleLoader__.load({
           return !!el;
         } catch { return false; /* 跳转失败不影响使用 */ }
       };
+
+      // 人设列表：一行一条，展开的那条把全文插在它自己下面（不弹窗，省得挡住别的设置）
+      const personaRows = [];
+      for (const p of (personas && Array.isArray(personas.list) ? personas.list : [])) {
+        personaRows.push(personaRow(p));
+        if (pOpen && pOpen.id === p.id) {
+          personaRows.push(h('div', {
+            key: p.id + '-text',
+            style: { padding: '6px 0 10px', borderTop: '1px dashed ' + C.line },
+          },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 4 } },
+              h('span', { style: { fontSize: 12, color: C.text2 } }, '全文 · ' + pOpen.name),
+              h('span', { style: { fontSize: 11, color: C.text3 } }, pOpen.text.length + ' 字'),
+            ),
+            h('div', {
+              style: {
+                whiteSpace: 'pre-wrap', fontSize: 12, lineHeight: '20px', color: C.text2,
+                maxHeight: 280, overflow: 'auto', padding: 8, borderRadius: 8,
+                background: 'rgba(120,125,135,0.06)',
+              },
+            }, pOpen.text),
+          ));
+        }
+      }
 
       return h('div', { 'data-dy-panel': '1', style: { padding: '4px 0 16px' } },
 
@@ -376,43 +517,87 @@ window.__ModuleLoader__.load({
             }),
           ),
         ),
+        h(Card, { title: '视频分析', anchor: 'analyze' },
+          h(Row, {
+            label: '硬字幕 OCR',
+            hint: '默认关：平时只做语音转写 + 画面联系表，一条 2 分钟视频约十几秒。'
+              + '开了会逐帧识别画面上的字幕（位置不固定也能认），拿到逐句精确、带时间轴的字幕，'
+              + '代价是纯 CPU 满载、一条 2 分钟视频多花约 5 分钟；不需要显卡，谁的机器都能跑。'
+              + '只在要逐字引用台词、或画面有字没口播时才值得开。',
+          }, h(Switch, { checked: !!cfg.subtitleOcr, onChange: (v) => save({ subtitleOcr: v }) })),
+        ),
         h(Card, { title: '人设', anchor: 'persona' },
-          h(Row, { label: '一行短人设', hint: '跟着每次唤醒走，建议 ≤60 字（每轮都带，别写长）' },
-            h('input', {
-              value: cfg.personaShort || '',
-              onChange: (e) => save({ personaShort: e.target.value }),
-              placeholder: '例如：说话简短、带点调侃，别用敬语',
-              style: Object.assign({}, ctlBase, { width: 320 }),
-            }),
+          h(Row, { label: '当前人设', hint: '挂进「被唤醒的那条会话」的系统提示词，每轮都在；换完下一条消息就生效，别的 Bot 看不到也不受影响' },
+            h('select', {
+              value: cfg.personaPreset || '',
+              onChange: (e) => mutatePersonas({ action: 'set-current', id: e.target.value }),
+              style: Object.assign({}, ctlBase, { width: 300 }),
+            }, [
+              h('option', { key: '', value: '' }, '不用（不挂人设）'),
+            ].concat((personas && personas.list ? personas.list : []).map((p) =>
+              h('option', { key: p.id, value: p.id },
+                p.name + (p.builtin ? '（内置）' : '（导入）') + (p.enabled === false ? '·已停用' : '')),
+            ))),
           ),
-          h('div', { style: { padding: '10px 0 6px' } },
-            h('div', { style: { fontSize: 13, color: C.text } }, '完整人设（建议 ≤300 字）'),
-            h('div', { style: { fontSize: 12, color: C.text3, marginTop: 2 } }, '不会每轮发；点下面按钮才注入当前会话，之后靠会话记忆生效'),
+          pNote ? h('div', { style: { fontSize: 12, color: '#d4380d', marginBottom: 6 } }, pNote) : null,
+          personas && personas.list
+            ? h('div', { style: { fontSize: 11, color: C.text3, margin: '-2px 0 6px' } },
+                '库文件 ' + personas.store + ' · 共 ' + personas.list.length + ' 条（内置三套只读，导入的能改名 / 停用 / 删除）')
+            : null,
+          h('div', { style: { padding: '8px 0 10px' } },
+            personaRows.length
+              ? personaRows
+              : h('div', { style: { fontSize: 12, color: C.text3, padding: '6px 0' } }, '人设列表没读出来（看上面的提示，或者刷新页面再试）'),
+          ),
+          h('div', { style: { padding: '4px 0 12px', borderTop: '1px solid ' + C.line } },
+            h('div', { style: { fontSize: 13, color: C.text, marginTop: 8 } }, '导入一套自己的'),
+            h('div', { style: { fontSize: 12, color: C.text3, marginTop: 2 } }, '存进库文件，跟插件一起留着；也可以直接选一个 .md，整篇当人设正文'),
+            h('div', { style: { display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' } },
+              h('input', {
+                value: pDraft.name,
+                onChange: (e) => setPDraft(Object.assign({}, pDraft, { name: e.target.value })),
+                placeholder: '名字，例如：我的口头禅版',
+                style: Object.assign({}, ctlBase, { width: 240, fontSize: 12 }),
+              }),
+              h('label', {
+                style: Object.assign({}, btnBase, {
+                  display: 'inline-flex', alignItems: 'center', height: 32, padding: '0 10px', borderRadius: 8,
+                }),
+              }, '选 .md 文件',
+                h('input', {
+                  type: 'file', accept: '.md,.markdown,.txt', style: { display: 'none' },
+                  onChange: (e) => {
+                    const f = e.target.files && e.target.files[0];
+                    if (!f) { e.target.value = ''; return; }
+                    const rd = new FileReader();
+                    rd.onload = () => {
+                      const txt = String(rd.result || '');
+                      setPDraft((d) => ({ name: d.name || f.name.replace(/\.(md|markdown|txt)$/i, ''), text: txt }));
+                    };
+                    rd.onerror = () => setPNote('读文件失败：' + f.name);
+                    rd.readAsText(f, 'utf-8');
+                    e.target.value = ''; // 允许再选同一个文件
+                  },
+                }),
+              ),
+            ),
             h('textarea', {
-              defaultValue: cfg.personaFull || '',
-              key: 'personaFull',
-              onBlur: (e) => save({ personaFull: e.target.value }),
-              rows: 4,
-              placeholder: '性格、口头禅、回答习惯、禁忌……',
+              value: pDraft.text,
+              onChange: (e) => setPDraft(Object.assign({}, pDraft, { text: e.target.value })),
+              rows: 5,
+              placeholder: '人设正文：它是谁、怎么说话、口头禅、哪些话不许说……越具体越像',
               style: Object.assign({}, ctlBase, { width: '100%', height: 'auto', padding: 8, marginTop: 8, fontSize: 12, lineHeight: '18px', boxSizing: 'border-box' }),
             }),
             h('div', { style: { marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' } },
               h('button', {
-                type: 'button',
-                onClick: () => {
-                  if (injecting) return
-                  setInjecting(true)
-                  setNote('正在注入人设…')
-                  fetch('/api/douyin-watch/persona/inject', { method: 'POST' })
-                    .then((r) => r.json())
-                    .then((d) => setNote(d.ok ? ('人设已注入（' + d.via + '，' + d.chars + ' 字）') : ('注入失败：' + (d.error || '未知'))))
-                    .catch(() => setNote('注入失败：接口没返回'))
-                    .then(() => setInjecting(false))
-                },
-                disabled: injecting,
-                style: Object.assign({}, ctlBase, { width: 'auto', padding: '0 12px', cursor: injecting ? 'default' : 'pointer', color: C.text2 }),
-              }, injecting ? '注入中…' : '注入到当前会话'),
-              h('span', { style: { fontSize: 12, color: C.text3 } }, '已填 ' + (cfg.personaFull || '').length + ' 字'),
+                type: 'button', onClick: submitImport,
+                style: Object.assign({}, btnBase, { height: 30, padding: '0 14px', fontSize: 13 }),
+              }, '导入'),
+              h('button', {
+                type: 'button', onClick: () => setPDraft({ name: '', text: '' }),
+                style: Object.assign({}, btnBase, { height: 30, padding: '0 12px', fontSize: 13 }),
+              }, '清空'),
+              h('span', { style: { fontSize: 12, color: C.text3 } }, '已填 ' + String(pDraft.text || '').length + ' 字'),
             ),
           ),
         ),
