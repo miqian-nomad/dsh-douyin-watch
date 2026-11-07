@@ -2315,13 +2315,21 @@ export function apply(ctx, config) {
 
           // 2026-11-07 认领 + 验证：
           //   认领过谁（sec_uid），就只认这个人；他发来第一条消息时把 verified_at 写上，才算锁定。
-          let claim = readOwnerClaim()
+          //   ⚠️ 整段包 try/catch：身份判断出错最多退回"按陌生人处理"，绝不能连累整轮读私信
+          //      （上一版就是这里抛了 ReferenceError，把哨兵整轮打挂）。
+          let claim = null
           let claimLine = ''
-          if (claim && claim.sec_uid && readSec && readSec === claim.sec_uid && !claim.verified_at) {
-            claim = { sec_uid: claim.sec_uid, nick: claim.nick, claimed_at: claim.claimed_at, verified_at: new Date().toISOString() }
-            writeOwnerClaim(claim)
-            log('主人已验证：' + (claim.nick || (readSec.slice(0, 12) + '…')) + ' 发来消息，身份锁定')
-            claimLine = '\n（主人身份刚刚验证成功：这条就是他本人发的，以后只认这个 ID）\n'
+          try {
+            claim = readOwnerClaim()
+            if (claim && claim.sec_uid && readSec && readSec === claim.sec_uid && !claim.verified_at) {
+              claim = { sec_uid: claim.sec_uid, nick: claim.nick, claimed_at: claim.claimed_at, verified_at: new Date().toISOString() }
+              writeOwnerClaim(claim)
+              log('主人已验证：' + (claim.nick || (readSec.slice(0, 12) + '…')) + ' 发来消息，身份锁定')
+              claimLine = '\n（主人身份刚刚验证成功：这条就是他本人发的，以后只认这个 ID）\n'
+            }
+          } catch (e) {
+            log('身份判断出错了（按陌生人处理）：' + ((e && e.message) || e))
+            claimLine = ''
           }
           const claimedOwner = !!(claim && claim.sec_uid && readSec && readSec === claim.sec_uid)
           // 没认领过才退回旧逻辑：验收过的会话，或昵称比对
