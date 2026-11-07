@@ -598,6 +598,49 @@ export function apply(ctx, config) {
             errors: Array.isArray(p.errors) ? p.errors : (p.error ? [String(p.error)] : []),
           })
         }
+        // 2026-11-07：检查一下 —— 三项自检，结果直接铺在设置页（对齐 dsh-mobile 的"一键诊断"）
+        if (req.method === 'POST' && pathname === '/api/douyin-watch/doctor') {
+          const checks = []
+          try {
+            const r = await runNode(cfg.claimScript, ['--dry'])
+            const p = r && r.parsed
+            const okPage = !!(p && p.ok)
+            checks.push({
+              key: 'page',
+              name: '能打开抖音私信页',
+              ok: okPage,
+              detail: okPage ? ('现在页面上是「' + (p.nick || '没认出名字') + '」') : String((p && p.error) || (r && r.raw) || '打不开'),
+            })
+            if (okPage) {
+              const claim = readOwnerClaim()
+              const same = !!(claim && claim.sec_uid && p.sec_uid && claim.sec_uid === p.sec_uid)
+              checks.push({
+                key: 'who',
+                name: '屏幕上这个人就是你说的那个人',
+                ok: claim ? same : false,
+                detail: claim
+                  ? (same ? ('对上了：' + (claim.nick || '（没名字）')) : ('现在打开的是「' + (p.nick || '') + '」，跟设定的「' + (claim.nick || '') + '」不是一个'))
+                  : '还没设过，先点上面的按钮',
+              })
+            }
+          } catch (e) {
+            checks.push({ key: 'page', name: '能打开抖音私信页', ok: false, detail: String((e && e.message) || e) })
+          }
+          try {
+            const sid = String(cfg.sessionId || '').trim()
+            const agent = sid ? liveAgentOf(normSid(sid)) : null
+            checks.push({
+              key: 'session',
+              name: '回复能发到 DSH 对话',
+              ok: sid ? true : true,
+              detail: sid ? (agent ? '那个对话开着，能直接发' : '那个对话现在没开，收到消息时会自动唤醒它') : '没指定，会发到最近在用的那个',
+            })
+          } catch (e) {
+            checks.push({ key: 'session', name: '回复能发到 DSH 对话', ok: false, detail: String((e && e.message) || e) })
+          }
+          log('检查一下：' + checks.map((c) => (c.ok ? '✓' : '✗') + c.name).join(' / '))
+          return sendJson(200, { ok: true, checks })
+        }
         // 2026-11-07：认领主人 —— 读"当前打开的那条会话"的对端身份，写 owner.json。
         //   之后那个人再发一条消息过来，哨兵读到才把 verified_at 写上（真正锁定）。
         if (req.method === 'POST' && pathname === '/api/douyin-watch/claim') {

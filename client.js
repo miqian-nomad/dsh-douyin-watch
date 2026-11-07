@@ -225,6 +225,10 @@ window.__ModuleLoader__.load({
       // 2026-11-07：认领主人（读当前打开会话的 sec_uid，之后等对方发消息验证）
       const [claimBusy, setClaimBusy] = useState(false);
       const [claimMsg, setClaimMsg] = useState('');
+      // 2026-11-07：检查一下（对齐 dsh-mobile 的一键诊断）+ 高级折叠
+      const [checkBusy, setCheckBusy] = useState(false);
+      const [checks, setChecks] = useState(null);
+      const [advOpen, setAdvOpen] = useState(false);
 
       // 人设库（内置三套只读 + 导入的可编辑），列表只拿元数据，正文按需取
       const loadPersonas = () => fetch('/api/douyin-watch/personas')
@@ -357,6 +361,20 @@ window.__ModuleLoader__.load({
         }).then((r) => r.json())
           .then((d) => { setCfg(d.config || {}); setNote('已保存'); })
           .catch(() => setNote('保存失败'));
+      };
+
+      // 检查一下（2026-11-07）：让用户不用翻日志就知道卡在哪
+      const runCheck = () => {
+        setCheckBusy(true); setChecks(null);
+        fetch('/api/douyin-watch/doctor', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+          .then((r) => r.json())
+          .then((d) => {
+            setCheckBusy(false);
+            setChecks(Array.isArray(d.checks) && d.checks.length
+              ? d.checks
+              : [{ key: 'x', name: '没拿到检查结果', ok: false, detail: (d && d.error) || '接口没回应' }]);
+          })
+          .catch(() => { setCheckBusy(false); setChecks([{ key: 'x', name: '没拿到检查结果', ok: false, detail: '接口没回应' }]); });
       };
 
       // 认领当前打开的那条会话（2026-11-07）：先让用户去抖音点开聊天，再点这里
@@ -501,9 +519,25 @@ window.__ModuleLoader__.load({
             )
           })(),
           claimMsg ? h('div', { style: { fontSize: 12, color: claimMsg.indexOf('失败') === 0 ? '#c0392b' : C.text2, padding: '0 0 8px' } }, claimMsg) : null,
-          h(Row, { label: '监听哪个抖音聊天', hint: '填抖音私信列表里那个聊天的名字；点上面的按钮会自动填好，一般不用自己改' },
-            h(TextField, { value: cfg.peer || '', placeholder: '例：鲜葱、', onCommit: (v) => save({ peer: v }) }),
+          h(Row, { label: '检查一下', hint: '挨个试一遍：能不能打开抖音、屏幕上是不是那个人、回复能不能发出去' },
+            h('button', {
+              type: 'button', disabled: checkBusy, onClick: runCheck,
+              style: Object.assign({}, btnBase, { cursor: checkBusy ? 'default' : 'pointer' }),
+            }, checkBusy ? '正在检查…（十几秒）' : '开始检查'),
           ),
+          checks ? h('div', { style: { padding: '2px 0 10px', display: 'flex', flexDirection: 'column', gap: 4 } },
+            ...checks.map((c) => h('div', { key: c.key, style: { fontSize: 12.5, color: c.ok ? C.text2 : '#c0392b', lineHeight: '19px' } },
+              (c.ok ? '✓ ' : '✗ ') + c.name + '：' + c.detail)),
+          ) : null,
+          h('div', { style: { padding: '2px 0 6px' } },
+            h('button', {
+              type: 'button', onClick: () => setAdvOpen(!advOpen),
+              style: Object.assign({}, btnBase, { cursor: 'pointer' }),
+            }, advOpen ? '收起高级' : '高级（一般不用动）'),
+          ),
+          advOpen ? h(Row, { label: '它跟谁聊', hint: '填抖音私信里那个人的昵称。这个 Bot 只看这一条聊天，别人发消息它不理' },
+            h(TextField, { value: cfg.peer || '', placeholder: '例：鲜葱、', onCommit: (v) => save({ peer: v }) }),
+          ) : null,
           h(Row, { label: '回复发到哪个对话', hint: '这些是 DSH 里的对话（按最近使用排序），不是抖音聊天。不选 = 发到最近在用的那个；选错了随时改' },
             h(SessionPicker, { current: cfg.sessionId || '', onPick: (v) => save({ sessionId: v }) }),
           ),

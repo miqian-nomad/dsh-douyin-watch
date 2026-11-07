@@ -16,6 +16,9 @@ import { homeDir } from '../lib/paths.mjs'
 
 const out = (o) => { process.stdout.write(JSON.stringify(o) + '\n') }
 
+// --dry：只检查、不写 owner.json（给设置页的「检查一下」用）
+const DRY = process.argv.includes('--dry')
+
 // 从右栏会话里取对端身份：先看消息节点的 React 数据，再退一步看右栏标题
 const OPENED_PEER = `(function () {
   var secOf = function (n) {
@@ -63,7 +66,7 @@ try {
     claimed_at: new Date().toISOString(),
     verified_at: new Date().toISOString(),
   }
-  writeFileSync(join(homeDir({ create: false }), 'owner.json'), JSON.stringify(rec, null, 2))
+  if (!DRY) writeFileSync(join(homeDir({ create: false }), 'owner.json'), JSON.stringify(rec, null, 2))
   out({ ok: true, ...rec })
 } catch (e) {
   out({ ok: false, error: String((e && e.message) || e) })
