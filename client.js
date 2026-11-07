@@ -531,7 +531,7 @@ window.__ModuleLoader__.load({
           ),
           (cfg.strangerPolicy === 'ignore')
             ? h('div', { style: { fontSize: 12, color: '#b26a00', padding: '0 0 8px' } },
-              '注意：现在是「不回也不提醒」——别人发来的消息你不会收到任何通知。想收到提醒就改成上面第一项。')
+              '注意：现在是「不回也不提醒」——别人发来的消息你不会收到任何通知。想收到提醒，把上面那个选项改成「只提醒我，不回」。')
             : null,
           h(Row, { label: '多久看一次新消息', hint: '单位：秒。填太小费电脑，填太大收到提醒慢；框里现在这个数就是正在用的' },
             h('input', {
@@ -581,7 +581,7 @@ window.__ModuleLoader__.load({
             h('input', {
               value: cfg.autoScrollReportDir || '',
               onChange: (e) => save({ autoScrollReportDir: e.target.value }),
-              placeholder: 'D:\\path\\to\\dir',
+              placeholder: (cfg.dataDir || '不填 = 插件数据目录'),
               style: Object.assign({}, ctlBase, { width: 240 }),
             }),
           ),
@@ -596,7 +596,7 @@ window.__ModuleLoader__.load({
           }, h(Switch, { checked: !!cfg.subtitleOcr, onChange: (v) => save({ subtitleOcr: v }) })),
         ),
         h(Card, { title: '人设', anchor: 'persona' },
-          h(Row, { label: '当前人设', hint: '人设只影响它回话的语气和称呼，不会把这段文字发给对方；换完下一条消息就生效，不用重启' },
+          h(Row, { label: '当前人设', hint: '人设只影响这个 Bot 回话的语气和称呼，不会把这段文字发给对方；换完下一条消息就生效，不用重启' },
             h('select', {
               value: cfg.personaPreset || '',
               onChange: (e) => mutatePersonas({ action: 'set-current', id: e.target.value }),
@@ -691,7 +691,7 @@ window.__ModuleLoader__.load({
               style: Object.assign({}, ctlBase, { width: 320 }),
             }),
           ),
-          h(Row, { label: '字数上限', hint: '公开评论越短越安全' },
+          h(Row, { label: '评论最多几个字', hint: '公开评论越短越安全；这个数就是上限，超过会被截短' },
             h('input', {
               type: 'number', min: 10, max: 500,
               value: Number(cfg.commentMaxChars) || 60,
@@ -735,7 +735,7 @@ window.__ModuleLoader__.load({
               onChange: (v) => save({ commentAutoReplyOthers: v }),
             }),
           ),
-          h(Row, { label: '扫描间隔', hint: '分钟；太短会频繁读页面' },
+          h(Row, { label: '扫描间隔', hint: '隔几分钟看一次新评论。框里这个数就是现在用的；填太小会频繁读页面，容易触发验证码' },
             h('input', {
               type: 'number', min: 5, max: 240,
               value: Number(cfg.commentScanMinutes) || 10,
@@ -743,7 +743,7 @@ window.__ModuleLoader__.load({
               style: Object.assign({}, ctlBase, { width: 100 }),
             }),
           ),
-          h(Row, { label: '每次最多回', hint: '每次最多处理几条新评论，别一口气刷太多' },
+          h(Row, { label: '每次最多回', hint: '每轮最多处理几条新评论。数字越小越安全，没处理完的下一轮接着来' },
             h('input', {
               type: 'number', min: 1, max: 10,
               value: Number(cfg.commentMaxPerRound) || 3,
@@ -778,7 +778,7 @@ window.__ModuleLoader__.load({
           h(Row, { label: '只有 @ 的不回', hint: '比如「@本鲸不胖」这种没有可接内容的：回"在呢"就像客服机器人' },
             h(Switch, { checked: cfg.commentSkipPureMention !== false, onChange: (v) => save({ commentSkipPureMention: v }) }),
           ),
-          h(Row, { label: '我的作品', hint: '视频链接（抖音里点分享 → 复制链接），多个用逗号隔开。填了它才会主动去翻这些视频的评论；不填也会在收到评论通知时自己记住' },
+          h(Row, { label: '我的作品', hint: '视频链接（抖音里点分享 → 复制链接），多个用逗号隔开。填了这个 Bot 才会主动去翻这些视频的评论；不填也会在收到评论通知时自己记住' },
             h('input', {
               value: cfg.myWorks || '',
               onChange: (e) => save({ myWorks: e.target.value }),
