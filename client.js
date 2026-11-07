@@ -155,7 +155,7 @@ window.__ModuleLoader__.load({
           h('option', { value: '' }, '（不选：发到最近在用的那个对话）'),
           ...sorted.slice(0, 25).map((s) => h('option', { key: s.id, value: s.id },
             `${folder(s.cwd) || '（无文件夹）'}${s.blank ? '（空对话）' : ''}${s.live ? ' · 已打开' : ''}${fmtTime(s.updatedAt) ? ' · ' + fmtTime(s.updatedAt) : ''}`)),
-          sorted.length > 25 ? h('option', { value: '', disabled: true }, `（只列最近 25 个，共 ${sorted.length} 个）`) : null,
+          sorted.length > 25 ? h('option', { value: '', disabled: true }, `（只列最近 25 个，共 ${sorted.length} 个；想选更早的，先在 DSH 里打开它，它就会排上来）`) : null,
           (current && !known) ? h('option', { value: current }, '（原来选的对话，现在没找到）') : null,
         ),
         h('button', {
@@ -168,7 +168,7 @@ window.__ModuleLoader__.load({
     // 运行状态卡片：绿=运行中、灰=已停止、红=有错误。数据每 5 秒刷新一次（宿主 side 拼好）。
     // 2026-10-28 改成「一行状态 + 2×2 指标」：把最该看的四个数摆出来
     //   （今日评论额度 / 最后读取 / 签名直连 / 依赖），别让卡里空着。
-    function StatusCard({ s, q }) {
+    function StatusCard({ s, q, sessionId }) {
       const cell = (k, v, tone) => h('div', {
         style: { padding: '8px 10px', border: '1px solid ' + C.line, borderRadius: 10, background: C.bg2 || 'transparent' },
       },
@@ -203,8 +203,8 @@ window.__ModuleLoader__.load({
         h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 } },
           cell('今天已回评论（评论区，不是私信）', quotaTxt),
           cell('最后一次看消息', s.lastRead ? `${s.lastRead}，读到 ${s.lastCount || 0} 条` : '还没看过'),
-          cell('连上的 DSH 对话', s.bound ? (s.bound + ' 个') : '还没连上'),
           cell('最后一次收到私信', s.lastWake || '还没有'),
+          cell('回复发到哪个对话', sessionId ? '下面下拉框里选的那个' : '最近在用的那个'),
         ),
         bad ? h('div', { style: { fontSize: 12, color: '#c0392b', marginTop: 8 } }, '出错原因：' + s.lastError) : null,
       );
@@ -409,7 +409,7 @@ window.__ModuleLoader__.load({
       //   2026-10-28 踩过：按 innerText 前缀匹配时，卡片里的行标签（「公开评论语气」）
       //   也会命中，结果跳到卡片中间 —— 就是主人说的"跳转有问题"。
       const SECTIONS = [
-        { label: '私信哨兵', anchor: 'mail' },
+        { label: '私信监听', anchor: 'mail' },
         { label: '自动刷视频', anchor: 'autoscroll' },
         { label: '人设', anchor: 'persona' },
         { label: '公开评论', anchor: 'public' },
@@ -476,12 +476,12 @@ window.__ModuleLoader__.load({
         },
           h('div', null,
             h('div', { style: { fontSize: 13.5, fontWeight: 600, color: C.text } }, '启用插件'),
-            h('div', { style: { fontSize: 12, color: C.text3 } }, '总开关：关掉后不读私信、不自动回复'),
+            h('div', { style: { fontSize: 12, color: C.text3 } }, '这是插件的总开关：关掉后私信不读、也不回。下面「自动刷视频」和「评论区自动回」各有自己的开关，不受这里影响'),
           ),
           h(Switch, { checked: !!cfg.enabled, onChange: (v) => save({ enabled: v }) }),
         ),
 
-        h(StatusCard, { s: status, q: cfg.commentQuota }),
+        h(StatusCard, { s: status, q: cfg.commentQuota, sessionId: cfg.sessionId }),
 
         h(Card, { title: '私信监听', anchor: 'mail' },
           // 2026-11-07：第一句先说结果 —— 小白反馈"全页没有一句说清是谁的号发出去的"
@@ -507,7 +507,7 @@ window.__ModuleLoader__.load({
           h(Row, { label: '回复发到哪个对话', hint: '这些是 DSH 里的对话（按最近使用排序），不是抖音聊天。不选 = 发到最近在用的那个；选错了随时改' },
             h(SessionPicker, { current: cfg.sessionId || '', onPick: (v) => save({ sessionId: v }) }),
           ),
-          h(Row, { label: '收到他的消息自动回', hint: '关掉 = 只提醒你，不回' }, h(Switch, { checked: !!cfg.ownerAutoReply, onChange: (v) => save({ ownerAutoReply: v }) })),
+          h(Row, { label: '收到这个人的消息自动回', hint: '关掉 = 只提醒你，不回' }, h(Switch, { checked: !!cfg.ownerAutoReply, onChange: (v) => save({ ownerAutoReply: v }) })),
           h(Row, { label: '回复多长', hint: '「完整」可能好几段；「精简」只发结论那一句' },
             h('select', {
               value: cfg.replyMode || 'conclusion',
@@ -573,7 +573,7 @@ window.__ModuleLoader__.load({
 
         h(Card, { title: '日报（可选）' },
           h(Row, { label: '写日报文件', hint: '默认不生成；开了每天生成一份文本文件（记事本能打开）' }, h(Switch, { checked: !!cfg.autoScrollWriteReport, onChange: (v) => save({ autoScrollWriteReport: v }) })),
-          h(Row, { label: '日报目录', hint: '不填就存在当前工作文件夹里' },
+          h(Row, { label: '日报目录', hint: '不填就存在这个 Bot 自己的文件夹里（设置页顶部写的那个工作区）' },
             h('input', {
               value: cfg.autoScrollReportDir || '',
               onChange: (e) => save({ autoScrollReportDir: e.target.value }),
@@ -592,7 +592,7 @@ window.__ModuleLoader__.load({
           }, h(Switch, { checked: !!cfg.subtitleOcr, onChange: (v) => save({ subtitleOcr: v }) })),
         ),
         h(Card, { title: '人设', anchor: 'persona' },
-          h(Row, { label: '当前人设', hint: '选定的人设会跟着它每条回复；换完下一条消息就生效，不用重启' },
+          h(Row, { label: '当前人设', hint: '选定的人设会跟着每条回复一起发出去；换完下一条消息就生效，不用重启' },
             h('select', {
               value: cfg.personaPreset || '',
               onChange: (e) => mutatePersonas({ action: 'set-current', id: e.target.value }),
@@ -628,7 +628,7 @@ window.__ModuleLoader__.load({
                 style: Object.assign({}, btnBase, {
                   display: 'inline-flex', alignItems: 'center', height: 32, padding: '0 10px', borderRadius: 8,
                 }),
-              }, '选 .md 文件',
+              }, '选一个文本文件',
                 h('input', {
                   type: 'file', accept: '.md,.markdown,.txt', style: { display: 'none' },
                   onChange: (e) => {
@@ -669,7 +669,7 @@ window.__ModuleLoader__.load({
         h(Card, { title: '公开评论（评论区专用）', anchor: 'public' },
           h('div', { style: { padding: '0 0 4px' } },
             h('div', { style: { fontSize: 13, color: C.text } }, '公开评论语气'),
-            h('div', { style: { fontSize: 12, color: C.text3, marginTop: 2 } }, '跟上面的人设分开：评论区是公开的，别把私信里的称呼（主人 / 卖萌动作）搬过去；留空 = 不加额外要求'),
+            h('div', { style: { fontSize: 12, color: C.text3, marginTop: 2 } }, '跟上面的人设分开：评论区是公开的，别把私信里那套称呼和卖萌动作搬过去；留空 = 不加额外要求'),
             h('textarea', {
               defaultValue: cfg.personaPublic || '',
               key: 'personaPublic',
@@ -695,7 +695,7 @@ window.__ModuleLoader__.load({
               style: Object.assign({}, ctlBase, { width: 100 }),
             }),
           ),
-          h(Row, { label: '频次上限', hint: '超过就拒发（防批量刷评被判风控）；同一句评论 7 天内不许重发' },
+          h(Row, { label: '频次上限', hint: '每小时、每天最多发几条；超了就不发（防止被平台判成刷屏）。不填 = 用上面的默认值。同一句话 7 天内不会重复发' },
             h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
               h('input', {
                 type: 'number', min: 1, max: 100,
@@ -739,7 +739,7 @@ window.__ModuleLoader__.load({
               style: Object.assign({}, ctlBase, { width: 100 }),
             }),
           ),
-          h(Row, { label: '每次最多回', hint: '一次丢给我的条数，别一口气 20 条' },
+          h(Row, { label: '每次最多回', hint: '每次最多处理几条新评论，别一口气刷太多' },
             h('input', {
               type: 'number', min: 1, max: 10,
               value: Number(cfg.commentMaxPerRound) || 3,
@@ -786,7 +786,7 @@ window.__ModuleLoader__.load({
           h('div', { style: { fontSize: 12, color: C.text3, paddingTop: 6, lineHeight: '20px' } },
             (() => {
               const list = String(cfg.myWorks || '').split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean)
-              if (!list.length) return '已记住作品：0 个（还没有——收到作品评论通知会自动记住，或手动填 id）'
+              if (!list.length) return '已记住作品：0 个（还没有——收到作品评论通知会自动记住，也可以在下面手动填链接）'
               return '已记住作品：' + list.length + ' 个 · ' + list.slice(0, 3).map((x) => x.replace(/^.*\/video\//, '')).join('、') + (list.length > 3 ? ' …' : '')
             })(),
           ),
