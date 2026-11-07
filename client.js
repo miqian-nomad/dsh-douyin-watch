@@ -476,7 +476,7 @@ window.__ModuleLoader__.load({
         h(Card, { title: '私信哨兵', anchor: 'mail' },
           (() => {
             const cl = cfg.claim
-            const txt = !cl ? '未认领' : (cl.verified_at ? ('已锁定「' + (cl.nick || '对方') + '」') : '已认领，等他发条消息')
+            const txt = !cl ? '未认领' : ('已锁定「' + (cl.nick || '对方') + '」')
             return h(Row, { label: '主人', hint: '先在抖音点开他的聊天，再点认领' },
               h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
                 h('span', { style: { fontSize: 13, color: cl && cl.verified_at ? C.text : C.text2 } }, txt),

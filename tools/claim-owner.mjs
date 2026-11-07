@@ -6,7 +6,7 @@
  *     node tools/claim-owner.mjs
  *   输出一行 JSON：{ ok, sec_uid, nick, claimed_at, verified_at } 或 { ok:false, error }
  *
- *   verified_at 由哨兵填：认领之后，那个人再发来一条消息，才算"验证通过"锁定。
+ *   认领即生效：verified_at 直接写认领时间。点错了就再点一次「重新认领」。
  */
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -61,7 +61,7 @@ try {
     sec_uid: String(idn.sec || ''),
     nick: String(idn.title || '').trim(),
     claimed_at: new Date().toISOString(),
-    verified_at: null,
+    verified_at: new Date().toISOString(),
   }
   writeFileSync(join(homeDir({ create: false }), 'owner.json'), JSON.stringify(rec, null, 2))
   out({ ok: true, ...rec })
