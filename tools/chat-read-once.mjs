@@ -135,12 +135,20 @@ const OPENED_PEER = `(function () {
     }
     return '';
   };
+  // 2026-11-07 补：某些页面上 fiber 里取不到 sec_uid，但 peer.json 里记着。
+  //   ⚠️ 不硬编码任何账号昵称：目标名从 --to / DOUYIN_PEER / peer.json 来（公开仓库不带个人标识）。
+  //   只有右栏标题跟目标一致（或页面干脆没给标题）时，才敢用本地 sec_uid 兜底。
+  var fallback = ${JSON.stringify(String(peerCfg.sec_uid || ''))};
+  var want = ${JSON.stringify(String(TO || ''))};
   var msgs = document.querySelectorAll('[class*="messageMessageBox"]');
   for (var i = 0; i < msgs.length; i++) { var s = secOf(msgs[i]); if (s) return JSON.stringify({ sec: s, via: 'msg' }); }
   var h = document.querySelector('[class*="RightPanelHeadertitle"]');
   var title = h ? String(h.innerText || '').trim() : '';
   var t = h;
   for (var j = 0; t && j < 6; j++) { var s2 = secOf(t); if (s2) return JSON.stringify({ sec: s2, title: title, via: 'head' }); t = t.parentElement; }
+  if (fallback && (!title || (want && (title === want || title.indexOf(want) === 0)))) {
+    return JSON.stringify({ sec: fallback, title: title || want, via: 'peer.json' });
+  }
   return JSON.stringify({ sec: '', title: title, via: 'none' });
 })()`
 

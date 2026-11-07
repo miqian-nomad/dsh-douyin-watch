@@ -21,11 +21,14 @@
     - id: douyin-watch          # ⭐ 必须等于命名空间名
       name: 'dsh-douyin-watch'
       config:
-        home: 'D:\douyin-duty'
-        cfgFile: 'D:\douyin-duty\watch-config.json'
+        # 下面这些是「装到自己机器上要填的值」，公开包里一律留占位。
+        # 认领主人功能上线后，peer / owner 已经不用手填了（设置页点「认领当前会话」），
+        # 这里留空即可；home / cfgFile 按自己机器的实际目录改。
+        home: '[PLACEHOLDER_DOUYIN_HOME]'
+        cfgFile: '[PLACEHOLDER_DOUYIN_HOME]/watch-config.json'
         chatUrl: 'https://www.douyin.com/chat'
-        peer: '迷迁'
-        logFile: 'D:\douyin-duty\watch-plugin.log'
-        owner: '迷迁'
-        targetCwd: 'D:\work-harness\2026-10-23-15-50-29'
-        commentUrl: 'https://www.douyin.com/video/7692296548180446504'
+        peer: ''
+        logFile: '[PLACEHOLDER_DOUYIN_HOME]/watch-plugin.log'
+        owner: ''
+        targetCwd: ''
+        commentUrl: ''

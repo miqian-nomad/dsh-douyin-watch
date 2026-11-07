@@ -2374,17 +2374,26 @@ export function apply(ctx, config) {
           const senderName = String((lastReadMeta && lastReadMeta.peer && lastReadMeta.peer.title) || peerNick || '对方')
 
           // 2026-11-07 认领：认领过谁（sec_uid），就只认这个人。
+          //   ⚠️ 兜底（同日修）：认领记录里 sec_uid 为空时**不算认领**。
+          //      否则一条半截的 owner.json（只有 nick）会把 fromOwner 恒判成假，
+          //      主人自己发的消息全被标成"不是主人，只提醒不要回"。
+          //      宁可退回昵称/已验证会话那条老路，也别把主人锁在门外。
           //   ⚠️ 整段包 try/catch：身份判断出错最多退回"按陌生人处理"，绝不能连累整轮读私信。
           let claim = null
           try {
-            claim = readOwnerClaim()
+            const rawClaim = readOwnerClaim()
+            claim = (rawClaim && String(rawClaim.sec_uid || '').trim()) ? rawClaim : null
           } catch (e) {
             log('身份判断出错了（按陌生人处理）：' + ((e && e.message) || e))
           }
           const claimedOwner = !!(claim && claim.sec_uid && readSec && readSec === claim.sec_uid)
+          // 页面明确说"这条会话已验证是目标"，但没能给出 sec_uid 时，也认主人。
+          //   chat-read-once.mjs 在部分页面上只给标题不给 sec（verified=true, peer.sec=''），
+          //   光比 sec_uid 会把主人自己发的消息判成陌生人（2026-11-07 实测）。
+          const verifiedPage = !!(lastReadMeta && lastReadMeta.verified === true && !readSec)
           // 没认领过才退回旧逻辑：验收过的会话，或昵称比对
           const legacyOwner = !claim && (!!(lastReadMeta && lastReadMeta.verified === true) || (Boolean(ownerNick) && peerNick === ownerNick))
-          const fromOwner = claimedOwner || legacyOwner
+          const fromOwner = claimedOwner || verifiedPage || legacyOwner
 
           for (const m of theirs) {
             if (m.img && !m.text) m.localPath = await fetchImage(m.img, m.sid)
