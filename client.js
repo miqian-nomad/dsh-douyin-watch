@@ -59,6 +59,24 @@ window.__ModuleLoader__.load({
       cursor: 'pointer', whiteSpace: 'nowrap',
     };
 
+    // 2026-11-07：文本输入框要"失焦/回车才存"。
+    //   为什么不能像数字框那样 onChange 直接 save：peer 一变后端就重绑哨兵，
+    //   逐字保存 = 每敲一个字母停一次哨兵、再启一次（实测会一直空转）。
+    function TextField({ value, placeholder, onCommit, width }) {
+      const [v, setV] = React.useState(value || '');
+      React.useEffect(() => { setV(value || ''); }, [value]);
+      const commit = () => { const t = v.trim(); if (t !== (value || '').trim()) onCommit(t); };
+      return h('input', {
+        type: 'text',
+        value: v,
+        placeholder: placeholder || '',
+        onChange: (e) => setV(e.target.value),
+        onBlur: commit,
+        onKeyDown: (e) => { if (e.key === 'Enter') { commit(); e.currentTarget.blur(); } },
+        style: Object.assign({}, ctlBase, { width: width || 200 }),
+      });
+    }
+
     function Row({ label, hint, children }) {
       return h('div', {
         style: {
@@ -436,8 +454,11 @@ window.__ModuleLoader__.load({
         h(StatusCard, { s: status, q: cfg.commentQuota }),
 
         h(Card, { title: '私信哨兵', anchor: 'mail' },
-          h(Row, { label: '主人' },
-            h('span', { style: { fontSize: 13, color: C.text2 } }, cfg.peer || '（未配置）'),
+          h(Row, { label: '要盯的会话昵称', hint: '私信列表里那个会话显示的名字；填了才算「在盯」，空着等于不工作' },
+            h(TextField, { value: cfg.peer || '', placeholder: '例：鲜葱、', onCommit: (v) => save({ peer: v }) }),
+          ),
+          h(Row, { label: '主人昵称', hint: '你自己的抖音昵称；和上面一致时才算「主人」，否则按陌生人处理' },
+            h(TextField, { value: cfg.owner || '', placeholder: '例：鲜葱、', onCommit: (v) => save({ owner: v }) }),
           ),
           h(Row, { label: '钉死会话', hint: '只往这条会话投递；它没开着会自动恢复（resume）。新建的会话点「刷新」就出现' },
             h(SessionPicker, { current: cfg.sessionId || '', onPick: (v) => save({ sessionId: v }) }),
