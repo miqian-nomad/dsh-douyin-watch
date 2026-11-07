@@ -142,16 +142,20 @@ window.__ModuleLoader__.load({
       useEffect(() => { load(); }, []);
       const items = list || [];
       const known = items.some((s) => s.id === current);
+      // 2026-11-07：小白（新用户）看不懂 "D-:dsh-bot的工作区" 这种串。
+      //   只显示文件夹名 + 时间，按最近使用排序 —— 用户认名字，不认路径。
+      const folder = (p) => { const a = String(p || '').split(/[\\/]/).filter(Boolean); return a.length ? a[a.length - 1] : ''; };
+      const sorted = items.slice().sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
       return h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
         h('select', {
           value: current || '',
           onChange: (e) => onPick(e.target.value),
-          style: Object.assign({}, ctlBase, { width: 330, fontSize: 12 }),
+          style: Object.assign({}, ctlBase, { width: 300, fontSize: 12 }),
         },
-          h('option', { value: '' }, '（不钉死：按工作目录找）'),
-          ...items.map((s) => h('option', { key: s.id, value: s.id },
-            `${shortCwd(s.cwd) || s.id.slice(0, 14)}${s.live ? ' · 运行中' : ''}${s.blank ? ' · 空白' : ''}${fmtTime(s.updatedAt) ? ' · ' + fmtTime(s.updatedAt) : ''}`)),
-          (current && !known) ? h('option', { value: current }, '当前：' + current.slice(0, 20) + '…') : null,
+          h('option', { value: '' }, '（不选：发到最近在用的那个对话）'),
+          ...sorted.map((s) => h('option', { key: s.id, value: s.id },
+            `${folder(s.cwd) || '（无文件夹）'}${s.blank ? '（空对话）' : ''}${s.live ? ' · 正在用' : ''}${fmtTime(s.updatedAt) ? ' · ' + fmtTime(s.updatedAt) : ''}`)),
+          (current && !known) ? h('option', { value: current }, '（原来选的对话，现在没找到）') : null,
         ),
         h('button', {
           type: 'button', onClick: load,
@@ -179,24 +183,29 @@ window.__ModuleLoader__.load({
       const bad = !!s.lastError;
       const color = bad ? '#c0392b' : (running ? '#2e7d32' : 'rgba(120,125,135,0.55)');
       const quota = q || {};
-      const quotaTxt = quota.perHour ? `${quota.hour || 0}/${quota.perHour} 条·时　${quota.day || 0}/${quota.perDay} 条·天` : '';
-      const signedTxt = s.signed ? (s.signedDeps ? '可用（走快路）' : '缺依赖，会退回页面') : '未安装（走页面）';
-      const signedTone = s.signed && s.signedDeps ? '#2e7d32' : (s.signed ? '#b26a00' : 'rgba(120,125,135,0.75)');
+      const quotaTxt = quota.perHour
+        ? (`已回 ${quota.hour || 0} 条 · 每小时最多 ${quota.perHour} · 每天最多 ${quota.perDay}`)
+        : '还没回过';
+      // 「签名直连」这种词用户读不懂，只说"读得快还是慢"
+      const signedTxt = s.signed
+        ? (s.signedDeps ? '直接连（快）' : '用浏览器页面（慢一点的备用方式）')
+        : '用浏览器页面（正常方式）';
+      const signedTone = s.signed && s.signedDeps ? '#2e7d32' : (s.signed ? '#b26a00' : C.text2);
       return h(Card, { title: '运行状态' },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0 10px' } },
           h('span', { style: { width: 8, height: 8, borderRadius: 4, background: color, flex: '0 0 auto' } }),
           h('span', { style: { fontSize: 13, fontWeight: 600, color: bad ? '#c0392b' : C.text } },
-            bad ? '出错' : (running ? '运行中' : '已停止')),
+            bad ? '出错了' : (running ? '正在监听' : '已暂停')),
           h('span', { style: { fontSize: 12, color: C.text3 } },
-            running ? `盯 ${s.bound || 0} 个会话` : '不读消息、不唤醒'),
+            running ? (s.bound ? '（已选定 1 个抖音聊天）' : '（还没选定抖音聊天，不会工作）') : '（暂停时不看消息）'),
         ),
         h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 } },
-          cell('今日评论额度', quotaTxt),
-          cell('最后读取', s.lastRead ? `${s.lastRead}（${s.lastCount || 0} 条）` : '还没读过'),
-          cell('签名直连', signedTxt, signedTone),
-          cell('最后唤醒', s.lastWake || '无'),
+          cell('今天已回评论', quotaTxt),
+          cell('最后一次看消息', s.lastRead ? `${s.lastRead}，读到 ${s.lastCount || 0} 条` : '还没看过'),
+          cell('读取方式', signedTxt, signedTone),
+          cell('最后一次收到私信', s.lastWake || '还没有'),
         ),
-        bad ? h('div', { style: { fontSize: 12, color: '#c0392b', marginTop: 8 } }, '错误：' + s.lastError) : null,
+        bad ? h('div', { style: { fontSize: 12, color: '#c0392b', marginTop: 8 } }, '出错原因：' + s.lastError) : null,
       );
     }
 
@@ -473,50 +482,53 @@ window.__ModuleLoader__.load({
 
         h(StatusCard, { s: status, q: cfg.commentQuota }),
 
-        h(Card, { title: '私信哨兵', anchor: 'mail' },
+        h(Card, { title: '私信监听', anchor: 'mail' },
+          // 2026-11-07：第一句先说结果 —— 小白反馈"全页没有一句说清是谁的号发出去的"
+          h('div', { style: { fontSize: 12, color: C.text3, padding: '0 0 10px', lineHeight: '18px' } },
+            '这里设置的所有回复，都是用你的抖音号发出去的，对方看到的就是一条普通私信。'),
           (() => {
             const cl = cfg.claim
-            const txt = !cl ? '未认领' : ('已锁定「' + (cl.nick || '对方') + '」')
-            return h(Row, { label: '主人', hint: '先在抖音点开他的聊天，再点认领' },
+            const txt = !cl ? '还没设置' : ('已设为「' + (cl.nick || '对方') + '」')
+            return h(Row, { label: '谁可以命令它', hint: '在抖音里点开那个人的聊天，再点右边按钮。设好之后，只有这个人发来的话才会被当成命令' },
               h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-                h('span', { style: { fontSize: 13, color: cl && cl.verified_at ? C.text : C.text2 } }, txt),
+                h('span', { style: { fontSize: 13, color: cl ? C.text : C.text2 } }, txt),
                 h('button', {
                   type: 'button', disabled: claimBusy, onClick: claimNow,
                   style: Object.assign({}, btnBase, { cursor: claimBusy ? 'default' : 'pointer' }),
-                }, claimBusy ? '认领中…' : (cl ? '重新认领' : '认领当前会话')),
+                }, claimBusy ? '设置中…' : (cl ? '换一个人' : '就设成这个人')),
               ),
             )
           })(),
           claimMsg ? h('div', { style: { fontSize: 12, color: claimMsg.indexOf('失败') === 0 ? '#c0392b' : C.text2, padding: '0 0 8px' } }, claimMsg) : null,
-          h(Row, { label: '要盯的会话昵称', hint: '私信列表里那个会话显示的名字；认领后会自动填上，一般不用改' },
+          h(Row, { label: '监听哪个抖音聊天', hint: '填抖音私信列表里那个聊天的名字；点上面的按钮会自动填好，一般不用自己改' },
             h(TextField, { value: cfg.peer || '', placeholder: '例：鲜葱、', onCommit: (v) => save({ peer: v }) }),
           ),
-          h(Row, { label: '钉死会话', hint: '只往这条会话投递；它没开着会自动恢复（resume）。新建的会话点「刷新」就出现' },
+          h(Row, { label: '回复发到哪个对话', hint: '这里是 DSH 里的对话，不是抖音聊天。不选 = 发到最近在用的那个' },
             h(SessionPicker, { current: cfg.sessionId || '', onPick: (v) => save({ sessionId: v }) }),
           ),
-          h(Row, { label: '主人消息自动回复', hint: '关 = 只提醒，不自动回' }, h(Switch, { checked: !!cfg.ownerAutoReply, onChange: (v) => save({ ownerAutoReply: v }) })),
-          h(Row, { label: '私信发什么', hint: '「完整结论」= 手机上看到的就是结论本身；「简版」= DSH 写详细、私信只发一段' },
+          h(Row, { label: '收到他的消息自动回', hint: '关掉 = 只提醒你，不回' }, h(Switch, { checked: !!cfg.ownerAutoReply, onChange: (v) => save({ ownerAutoReply: v }) })),
+          h(Row, { label: '回复多长', hint: '「完整」可能好几段；「精简」只发结论那一句' },
             h('select', {
               value: cfg.replyMode || 'conclusion',
               onChange: (e) => save({ replyMode: e.target.value }),
-              style: Object.assign({}, ctlBase, { width: 132 }),
+              style: Object.assign({}, ctlBase, { width: 160 }),
             },
-              h('option', { value: 'conclusion' }, '完整结论'),
-              h('option', { value: 'brief' }, '简版'),
+              h('option', { value: 'conclusion' }, '完整（可能好几段）'),
+              h('option', { value: 'brief' }, '精简（只发一句结论）'),
             ),
           ),
-          h(Row, { label: '非主人消息' },
+          h(Row, { label: '别人发来的消息' },
             h('select', {
               value: cfg.strangerPolicy || 'notify',
               onChange: (e) => save({ strangerPolicy: e.target.value }),
-              style: Object.assign({}, ctlBase, { width: 132 }),
+              style: Object.assign({}, ctlBase, { width: 160 }),
             },
-              h('option', { value: 'notify' }, '只提醒，不回'),
-              h('option', { value: 'reply' }, '可以回，也提醒'),
+              h('option', { value: 'notify' }, '只提醒我，不回'),
+              h('option', { value: 'reply' }, '可以回，也提醒我'),
               h('option', { value: 'ignore' }, '不回也不提醒'),
             ),
           ),
-          h(Row, { label: '轮询间隔', hint: '单位：秒' },
+          h(Row, { label: '多久看一次新消息', hint: '单位：秒，默认 30。填小了费电脑，填大了收到提醒慢' },
             h('input', {
               type: 'number', min: 10, max: 3600, value: cfg.intervalSeconds,
               onChange: (e) => save({ intervalSeconds: Number(e.target.value) }),
@@ -571,11 +583,11 @@ window.__ModuleLoader__.load({
         ),
         h(Card, { title: '视频分析', anchor: 'analyze' },
           h(Row, {
-            label: '硬字幕 OCR',
-            hint: '默认关：平时只做语音转写 + 画面联系表，一条 2 分钟视频约十几秒。'
-              + '开了会逐帧识别画面上的字幕（位置不固定也能认），拿到逐句精确、带时间轴的字幕，'
-              + '代价是纯 CPU 满载、一条 2 分钟视频多花约 5 分钟；不需要显卡，谁的机器都能跑。'
-              + '只在要逐字引用台词、或画面有字没口播时才值得开。',
+            label: '读视频画面上的文字',
+            hint: '默认关。关着 = 只把说的话转成文字，一条 2 分钟视频十几秒就好。'
+              + '开着 = 连画面里叠的字也一起认出来（字在哪都能认），字幕更准。'
+              + '代价：很费电脑 CPU，一条 2 分钟视频要多等约 5 分钟，这期间你电脑会明显变慢。'
+              + '只有需要逐字引用台词、或画面有字但没人念的时候才开。',
           }, h(Switch, { checked: !!cfg.subtitleOcr, onChange: (v) => save({ subtitleOcr: v }) })),
         ),
         h(Card, { title: '人设', anchor: 'persona' },
@@ -786,25 +798,25 @@ window.__ModuleLoader__.load({
             : null,
         ),
         h(Card, { title: '维护', anchor: 'maint' },
-          h(Row, { label: '浏览器模式', hint: '要过验证码就点右边那个按钮——它会切成有头、并直接跳到会弹滑块的视频页；过完切回「无头」' },
+          h(Row, { label: '浏览器窗口', hint: '平时后台跑就行。遇到验证码时点右边按钮：会弹出一个看得见的窗口，你手动划一下滑块，划完再切回后台' },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               h('select', {
                 value: cfg.browserMode || 'headless',
                 onChange: (e) => {
                   const m = e.target.value
-                  setNote(m === 'headed' ? '正在切到有头（重启浏览器，稍等）…' : '正在收回无头（重启浏览器）…')
+                  setNote(m === 'headed' ? '正在打开浏览器窗口（重启浏览器，稍等）…' : '正在切回后台运行（重启浏览器）…')
                   fetch('/api/douyin-watch/browser-mode', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: m }) })
                     .then((r) => r.json())
                     .then((d) => setNote(d.ok
-                      ? ('已切到' + (d.mode === 'headed' ? '有头' : '无头') + (d.verify ? '｜滑块已出现，去划' : ''))
+                      ? ('已切到' + (d.mode === 'headed' ? '浏览器窗口' : '后台运行') + (d.verify ? '｜滑块已出现，去划' : ''))
                       : ('切换失败：' + (d.error || '未知'))))
                     .catch(() => setNote('切换失败：接口没返回'))
                     .then(() => load())
                 },
                 style: Object.assign({}, ctlBase, { width: 132 }),
               },
-                h('option', { value: 'headless' }, '无头（平时）'),
-                h('option', { value: 'headed' }, '有头（过验证）'),
+                h('option', { value: 'headless' }, '后台运行（平时用）'),
+                h('option', { value: 'headed' }, '显示浏览器窗口（过验证码用）'),
               ),
               h('button', {
                 type: 'button',
@@ -812,29 +824,29 @@ window.__ModuleLoader__.load({
                 onClick: () => {
                   if (switching) return
                   setSwitching(true)
-                  setNote('正在切到有头并打开视频页（重启浏览器，十几秒）…')
+                  setNote('正在打开浏览器窗口并跳到视频页（重启浏览器，十几秒）…')
                   fetch('/api/douyin-watch/browser-mode', {
                     method: 'POST', headers: { 'content-type': 'application/json' },
                     body: JSON.stringify({ mode: 'headed' }),
                   })
                     .then((r) => r.json())
                     .then((d) => setNote(d.ok
-                      ? (d.verify ? '有头窗口已弹出，滑块就在这个页面上，去划吧' : '有头窗口已打开目标页，但这次没弹验证码（说明暂时不需要）')
+                      ? (d.verify ? '浏览器窗口已弹出，滑块就在这个页面上，去划一下' : '浏览器窗口已打开目标页，但这次没弹验证码（说明暂时不需要）')
                       : ('切换失败：' + (d.error || '未知'))))
                     .catch(() => setNote('切换失败：接口没返回'))
                     .then(() => { setSwitching(false); load() })
                 },
                 style: Object.assign({}, ctlBase, { width: 'auto', padding: '0 10px', cursor: switching ? 'default' : 'pointer', color: C.text2 }),
-              }, switching ? '切换中…' : '切有头 + 触发验证'),
+              }, switching ? '切换中…' : '打开窗口去验证'),
             ),
           ),
-          h(Row, { label: '清理浏览器缓存', hint: '只删 Cache / Code Cache 等可重建目录 + 7 天前的收件箱图片；Cookies 与本地存储一个字节不动' },
+          h(Row, { label: '清理浏览器缓存', hint: '删掉浏览器产生的临时文件；不会动你的抖音登录，也不会删聊天记录。另外会清掉收件箱里 7 天前的图片' },
             h('button', {
               type: 'button',
               onClick: () => {
                 if (cleaning) return
                 setCleaning(true)
-                setNote('正在清理（会先关掉那个无头浏览器，几十秒）…')
+                setNote('正在清理（会先关掉后台浏览器，几十秒）…')
                 fetch('/api/douyin-watch/cleanup', { method: 'POST' })
                   .then((r) => r.json())
                   .then((d) => {
