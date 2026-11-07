@@ -155,7 +155,7 @@ window.__ModuleLoader__.load({
           h('option', { value: '' }, '（不选：发到最近在用的那个对话）'),
           ...sorted.slice(0, 25).map((s) => h('option', { key: s.id, value: s.id },
             `${folder(s.cwd) || '（无文件夹）'}${s.blank ? '（空对话）' : ''}${s.live ? ' · 已打开' : ''}${fmtTime(s.updatedAt) ? ' · ' + fmtTime(s.updatedAt) : ''}`)),
-          sorted.length > 25 ? h('option', { value: '', disabled: true }, `（只列最近 25 个，共 ${sorted.length} 个；想选更早的，先在 DSH 里打开它，它就会排上来）`) : null,
+          sorted.length > 25 ? h('option', { value: '', disabled: true }, `（只列最近 25 个，共 ${sorted.length} 个；想选更早的，先在 DSH 里打开它，它就会排上来。中途离开这个页面不会丢设置）`) : null,
           (current && !known) ? h('option', { value: current }, '（原来选的对话，现在没找到）') : null,
         ),
         h('button', {
@@ -204,7 +204,7 @@ window.__ModuleLoader__.load({
           cell('今天已回评论（评论区，不是私信）', quotaTxt),
           cell('最后一次看消息', s.lastRead ? `${s.lastRead}，读到 ${s.lastCount || 0} 条` : '还没看过'),
           cell('最后一次收到私信', s.lastWake || '还没有'),
-          cell('回复发到哪个对话', sessionId ? '下面下拉框里选的那个' : '最近在用的那个'),
+          cell('回复发到哪个对话', s.sessionLabel || (sessionId ? '（已选，名字暂时没取到）' : '最近在用的那个')),
         ),
         bad ? h('div', { style: { fontSize: 12, color: '#c0392b', marginTop: 8 } }, '出错原因：' + s.lastError) : null,
       );
@@ -475,8 +475,8 @@ window.__ModuleLoader__.load({
           },
         },
           h('div', null,
-            h('div', { style: { fontSize: 13.5, fontWeight: 600, color: C.text } }, '启用插件'),
-            h('div', { style: { fontSize: 12, color: C.text3 } }, '这是插件的总开关：关掉后私信不读、也不回。下面「自动刷视频」和「评论区自动回」各有自己的开关，不受这里影响'),
+            h('div', { style: { fontSize: 13.5, fontWeight: 600, color: C.text } }, '私信功能开关'),
+            h('div', { style: { fontSize: 12, color: C.text3 } }, '只管私信：关掉后私信不读、也不回。刷视频和评论区自动回是另外两个页面，各有各的开关'),
           ),
           h(Switch, { checked: !!cfg.enabled, onChange: (v) => save({ enabled: v }) }),
         ),
@@ -529,6 +529,10 @@ window.__ModuleLoader__.load({
               h('option', { value: 'ignore' }, '不回也不提醒'),
             ),
           ),
+          (cfg.strangerPolicy === 'ignore')
+            ? h('div', { style: { fontSize: 12, color: '#b26a00', padding: '0 0 8px' } },
+              '注意：现在是「不回也不提醒」——别人发来的消息你不会收到任何通知。想收到提醒就改成上面第一项。')
+            : null,
           h(Row, { label: '多久看一次新消息', hint: '单位：秒。填太小费电脑，填太大收到提醒慢；框里现在这个数就是正在用的' },
             h('input', {
               type: 'number', min: 10, max: 3600, value: cfg.intervalSeconds,
@@ -573,7 +577,7 @@ window.__ModuleLoader__.load({
 
         h(Card, { title: '日报（可选）' },
           h(Row, { label: '写日报文件', hint: '默认不生成；开了每天生成一份文本文件（记事本能打开）' }, h(Switch, { checked: !!cfg.autoScrollWriteReport, onChange: (v) => save({ autoScrollWriteReport: v }) })),
-          h(Row, { label: '日报目录', hint: '不填就存在这个 Bot 自己的文件夹里（设置页顶部写的那个工作区）' },
+          h(Row, { label: '日报目录', hint: '不填就存在这个文件夹里：' + (cfg.dataDir || '插件数据目录') },
             h('input', {
               value: cfg.autoScrollReportDir || '',
               onChange: (e) => save({ autoScrollReportDir: e.target.value }),
@@ -592,7 +596,7 @@ window.__ModuleLoader__.load({
           }, h(Switch, { checked: !!cfg.subtitleOcr, onChange: (v) => save({ subtitleOcr: v }) })),
         ),
         h(Card, { title: '人设', anchor: 'persona' },
-          h(Row, { label: '当前人设', hint: '选定的人设会跟着每条回复一起发出去；换完下一条消息就生效，不用重启' },
+          h(Row, { label: '当前人设', hint: '人设只影响它回话的语气和称呼，不会把这段文字发给对方；换完下一条消息就生效，不用重启' },
             h('select', {
               value: cfg.personaPreset || '',
               onChange: (e) => mutatePersonas({ action: 'set-current', id: e.target.value }),
@@ -695,7 +699,7 @@ window.__ModuleLoader__.load({
               style: Object.assign({}, ctlBase, { width: 100 }),
             }),
           ),
-          h(Row, { label: '频次上限', hint: '每小时、每天最多发几条；超了就不发（防止被平台判成刷屏）。不填 = 用上面的默认值。同一句话 7 天内不会重复发' },
+          h(Row, { label: '频次上限', hint: '两个框里现在填的数就是上限，超了不发（防止被平台判成刷屏）。同一句话 7 天内不会重复发' },
             h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
               h('input', {
                 type: 'number', min: 1, max: 100,
@@ -725,7 +729,7 @@ window.__ModuleLoader__.load({
               onChange: (v) => save({ commentAutoReplyWork: v }),
             }),
           ),
-          h(Row, { label: '回复别人在我评论下的留言', hint: '有人在你评论下面回你时，由它去接；容易被平台当成刷屏，默认关' },
+          h(Row, { label: '回复别人在我评论下的留言', hint: '有人在你评论下面回你时，由这个 Bot 去接；容易被平台当成刷屏，默认关' },
             h(Switch, {
               checked: !!cfg.commentAutoReplyOthers,
               onChange: (v) => save({ commentAutoReplyOthers: v }),
@@ -778,7 +782,7 @@ window.__ModuleLoader__.load({
             h('input', {
               value: cfg.myWorks || '',
               onChange: (e) => save({ myWorks: e.target.value }),
-              placeholder: 'https://www.douyin.com/video/<作品id>',
+              placeholder: 'https://www.douyin.com/video/74xxxxxxxxxxxxxxx',
               style: Object.assign({}, ctlBase, { width: 380 }),
             }),
           ),

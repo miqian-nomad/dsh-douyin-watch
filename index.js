@@ -423,7 +423,19 @@ export function apply(ctx, config) {
             return j && j.mode === 'headed' ? 'headed' : 'headless'
           } catch { return 'headless' }
         }
-        const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; o.claim = readOwnerClaim(); o.browserMode = browserModeNow(); const hm = (t) => (t ? new Date(t).toLocaleTimeString(undefined, { hour12: false }) : String()); o.status = { enabled: !!cfg.enabled, bound: watched.size, peerSet: Boolean(String(cfg.peer || '').trim()), lastRead: hm(runtime.lastReadAt), lastCount: runtime.lastCount, lastFresh: runtime.lastFresh, lastWake: hm(runtime.lastWakeAt), lastError: runtime.lastError, line: '哨兵：' + (cfg.enabled ? '运行中' : '已停止') + (watched.size ? '（盯 ' + watched.size + ' 个会话）' : String()) + ' · 最后读取 ' + hm(runtime.lastReadAt) + '（' + runtime.lastCount + ' 条） · 最后唤醒 ' + (hm(runtime.lastWakeAt) || '无') + (cfg.enabled ? String() : ' · 已停靠页面，不再回执已读') + (runtime.lastError ? ' · 错误：' + runtime.lastError : String()) };
+        const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; o.claim = readOwnerClaim(); o.browserMode = browserModeNow(); o.dataDir = String(cfg.home || HOME);
+        // 2026-11-07：状态卡要显示"回复发到哪个对话"的真名字（不是"下拉里选的那个"）
+        if (cfg.sessionId) {
+          try {
+            const sc = ctx.get?.('sessionController')
+            const rs = sc && typeof sc.list === 'function' ? await sc.list({}) : null
+            const hit = ((rs && rs.items) || []).find((x) => String(x.sessionId || '') === String(cfg.sessionId))
+            if (hit && hit.cwd) {
+              const seg = String(hit.cwd).split(/[\\/]/).filter(Boolean)
+              o.sessionLabel = seg.length ? seg[seg.length - 1] : ''
+            }
+          } catch { /* 取不到就留空 */ }
+        } const hm = (t) => (t ? new Date(t).toLocaleTimeString(undefined, { hour12: false }) : String()); o.status = { enabled: !!cfg.enabled, bound: watched.size, peerSet: Boolean(String(cfg.peer || '').trim()), lastRead: hm(runtime.lastReadAt), lastCount: runtime.lastCount, lastFresh: runtime.lastFresh, lastWake: hm(runtime.lastWakeAt), lastError: runtime.lastError, line: '哨兵：' + (cfg.enabled ? '运行中' : '已停止') + (watched.size ? '（盯 ' + watched.size + ' 个会话）' : String()) + ' · 最后读取 ' + hm(runtime.lastReadAt) + '（' + runtime.lastCount + ' 条） · 最后唤醒 ' + (hm(runtime.lastWakeAt) || '无') + (cfg.enabled ? String() : ' · 已停靠页面，不再回执已读') + (runtime.lastError ? ' · 错误：' + runtime.lastError : String()) };
         // 签名直连可用性（2026-10-28）：设置页状态卡要能一眼看出"快路"在不在
         //   ① 脚本：$DOUYIN_SIGN_SCRIPT 或 _deps\scripts\douyin-signer\signed_get.py
         //   ② 依赖：_deps\python 下的 curl_cffi + cryptography（缺了签名脚本会 ImportError）
