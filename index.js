@@ -380,6 +380,10 @@ export function apply(ctx, config) {
   //    view() 里的 watched.size 就抛 TDZ 异常 → 接口 400 → 设置页永远「加载中…」。
   const watched = new Map() // agent -> dispose()
   const runtime = { lastReadAt: 0, lastCount: 0, lastFresh: 0, lastWakeAt: 0, lastError: String() } // 给设置页看的状态
+  // 2026-11-07：读私信那一步的"验收结果"（打开的是不是目标会话、对端 sec_uid 是多少）。
+  //   读取脚本会回头核对右栏身份，结果放这里给唤醒判断用 —— 必须放在插件外层作用域，
+  //   放小函数里 watchAgent 看不到（实测报 lastReadMeta is not defined）。
+  let lastReadMeta = null
   const stateOf = new Map() // agent -> { known:Set, ready:boolean }
   const toolDisposers = [] // 每个工具注册返回的卸载函数；插件卸载时一起清掉，避免热重载撞「already registered」
 
@@ -777,9 +781,6 @@ export function apply(ctx, config) {
       //    不再依赖"有没有推通知"。
       let workItems = []
       let workSelfNick = ''            // 自己作品的作者昵称（= 本账号），用来排掉"我自己发的评论"
-  // 2026-11-07：读私信那一步的"验收结果"（打开的是不是目标会话、对端 sec_uid 是多少）。
-  //   读取脚本现在会回头核对右栏会话身份，结果放在这里给唤醒判断用。
-  let lastReadMeta = null
       const unreachable = new Set()    // 发了但服务端看不见的线程（机器人/平台提示类评论）
       const workIds = known.slice(0, 3) // 一次最多看 3 个作品，别把页面读爆
       if (doWork && workIds.length) {

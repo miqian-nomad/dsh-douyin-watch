@@ -358,8 +358,7 @@ window.__ModuleLoader__.load({
             setClaimBusy(false);
             if (d && d.ok) {
               setCfg(d.config || cfg);
-              const n = (d.claim && d.claim.nick) || '对方';
-              setClaimMsg('已认领：' + n + '。现在让他给你发一条消息，收到就锁定（之后只认这个人，不看昵称）');
+              setClaimMsg('');
             } else {
               setClaimMsg('失败：' + ((d && d.error) || '认领没成功'));
             }
@@ -477,8 +476,8 @@ window.__ModuleLoader__.load({
         h(Card, { title: '私信哨兵', anchor: 'mail' },
           (() => {
             const cl = cfg.claim
-            const txt = !cl ? '未认领' : (cl.verified_at ? ('已锁定「' + (cl.nick || '对方') + '」') : ('已认领「' + (cl.nick || '对方') + '」，等他发条消息'))
-            return h(Row, { label: '主人', hint: '先在抖音里点开和主人的聊天，回来点右边「认领」；然后让他发一条消息过来 —— 收到就锁定，以后只认他这个人（不看昵称）' },
+            const txt = !cl ? '未认领' : (cl.verified_at ? ('已锁定「' + (cl.nick || '对方') + '」') : '已认领，等他发条消息')
+            return h(Row, { label: '主人', hint: '先在抖音点开他的聊天，再点认领' },
               h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
                 h('span', { style: { fontSize: 13, color: cl && cl.verified_at ? C.text : C.text2 } }, txt),
                 h('button', {
