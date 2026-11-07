@@ -212,6 +212,9 @@ window.__ModuleLoader__.load({
       const [pOpen, setPOpen] = useState(null);   // 查看全文：{ id, name, text }
       const [pEdit, setPEdit] = useState(null);   // 改名中：{ id, name }
       const [pDraft, setPDraft] = useState({ name: '', text: '' }); // 导入草稿
+      // 2026-11-07：认领主人（读当前打开会话的 sec_uid，之后等对方发消息验证）
+      const [claimBusy, setClaimBusy] = useState(false);
+      const [claimMsg, setClaimMsg] = useState('');
 
       // 人设库（内置三套只读 + 导入的可编辑），列表只拿元数据，正文按需取
       const loadPersonas = () => fetch('/api/douyin-watch/personas')
@@ -346,6 +349,24 @@ window.__ModuleLoader__.load({
           .catch(() => setNote('保存失败'));
       };
 
+      // 认领当前打开的那条会话（2026-11-07）：先让用户去抖音点开聊天，再点这里
+      const claimNow = () => {
+        setClaimBusy(true); setClaimMsg('');
+        fetch('/api/douyin-watch/claim', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+          .then((r) => r.json())
+          .then((d) => {
+            setClaimBusy(false);
+            if (d && d.ok) {
+              setCfg(d.config || cfg);
+              const n = (d.claim && d.claim.nick) || '对方';
+              setClaimMsg('已认领：' + n + '。现在让他给你发一条消息，收到就锁定（之后只认这个人，不看昵称）');
+            } else {
+              setClaimMsg('失败：' + ((d && d.error) || '认领没成功'));
+            }
+          })
+          .catch(() => { setClaimBusy(false); setClaimMsg('失败：接口没回应'); });
+      };
+
       // 失败时别再一直显示「加载中…」：把 note 里的错误直接显示出来（2026-10-24：那次 400 就是这么被吞掉的）
       if (!cfg || !rows) return h('div', { style: { padding: 16, fontSize: 13, color: note ? '#c0392b' : C.text3 } }, note || '加载中…');
 
@@ -454,7 +475,21 @@ window.__ModuleLoader__.load({
         h(StatusCard, { s: status, q: cfg.commentQuota }),
 
         h(Card, { title: '私信哨兵', anchor: 'mail' },
-          h(Row, { label: '要盯的会话昵称', hint: '私信列表里那个会话显示的名字；填了才算「在盯」。插件会自己记住这条会话的身份，重名、改名都不影响' },
+          (() => {
+            const cl = cfg.claim
+            const txt = !cl ? '未认领' : (cl.verified_at ? ('已锁定「' + (cl.nick || '对方') + '」') : ('已认领「' + (cl.nick || '对方') + '」，等他发条消息'))
+            return h(Row, { label: '主人', hint: '先在抖音里点开和主人的聊天，回来点右边「认领」；然后让他发一条消息过来 —— 收到就锁定，以后只认他这个人（不看昵称）' },
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                h('span', { style: { fontSize: 13, color: cl && cl.verified_at ? C.text : C.text2 } }, txt),
+                h('button', {
+                  type: 'button', disabled: claimBusy, onClick: claimNow,
+                  style: Object.assign({}, btnBase, { cursor: claimBusy ? 'default' : 'pointer' }),
+                }, claimBusy ? '认领中…' : (cl ? '重新认领' : '认领当前会话')),
+              ),
+            )
+          })(),
+          claimMsg ? h('div', { style: { fontSize: 12, color: claimMsg.indexOf('失败') === 0 ? '#c0392b' : C.text2, padding: '0 0 8px' } }, claimMsg) : null,
+          h(Row, { label: '要盯的会话昵称', hint: '私信列表里那个会话显示的名字；认领后会自动填上，一般不用改' },
             h(TextField, { value: cfg.peer || '', placeholder: '例：鲜葱、', onCommit: (v) => save({ peer: v }) }),
           ),
           h(Row, { label: '钉死会话', hint: '只往这条会话投递；它没开着会自动恢复（resume）。新建的会话点「刷新」就出现' },
