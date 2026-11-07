@@ -423,7 +423,7 @@ export function apply(ctx, config) {
             return j && j.mode === 'headed' ? 'headed' : 'headless'
           } catch { return 'headless' }
         }
-        const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; o.claim = readOwnerClaim(); o.browserMode = browserModeNow(); o.dataDir = String(cfg.home || HOME);
+        const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; o.claim = readOwnerClaim(); o.browserMode = browserModeNow(); o.dataDir = String(cfg.home || HOME); o.commentScanMinutes = Math.min(120, Math.max(5, Number(cfg.commentScanMinutes) || 10));
         // 2026-11-07：状态卡要显示"回复发到哪个对话"的真名字（不是"下拉里选的那个"）
         if (cfg.sessionId) {
           try {
@@ -432,7 +432,12 @@ export function apply(ctx, config) {
             const hit = ((rs && rs.items) || []).find((x) => String(x.sessionId || '') === String(cfg.sessionId))
             if (hit && hit.cwd) {
               const seg = String(hit.cwd).split(/[\\/]/).filter(Boolean)
-              o.sessionLabel = seg.length ? seg[seg.length - 1] : ''
+              const nm = seg.length ? seg[seg.length - 1] : ''
+              const tt = Number(hit.updatedAt || 0)
+              const d2 = new Date(tt)
+              const p2 = (n) => String(n).padStart(2, '0')
+              // 2026-11-07：跟下拉框一个格式（名字 + 时间），否则同名对话分不出来
+              o.sessionLabel = nm + (tt ? (' · ' + p2(d2.getMonth() + 1) + '-' + p2(d2.getDate()) + ' ' + p2(d2.getHours()) + ':' + p2(d2.getMinutes())) : '')
             }
           } catch { /* 取不到就留空 */ }
         } const hm = (t) => (t ? new Date(t).toLocaleTimeString(undefined, { hour12: false }) : String()); const sessionLabel = String(o.sessionLabel || ""); o.status = { sessionLabel, enabled: !!cfg.enabled, bound: watched.size, peerSet: Boolean(String(cfg.peer || '').trim()), lastRead: hm(runtime.lastReadAt), lastCount: runtime.lastCount, lastFresh: runtime.lastFresh, lastWake: hm(runtime.lastWakeAt), lastError: runtime.lastError, line: '哨兵：' + (cfg.enabled ? '运行中' : '已停止') + (watched.size ? '（盯 ' + watched.size + ' 个会话）' : String()) + ' · 最后读取 ' + hm(runtime.lastReadAt) + '（' + runtime.lastCount + ' 条） · 最后唤醒 ' + (hm(runtime.lastWakeAt) || '无') + (cfg.enabled ? String() : ' · 已停靠页面，不再回执已读') + (runtime.lastError ? ' · 错误：' + runtime.lastError : String()) };
