@@ -153,8 +153,9 @@ window.__ModuleLoader__.load({
           style: Object.assign({}, ctlBase, { width: 300, fontSize: 12 }),
         },
           h('option', { value: '' }, '（不选：发到最近在用的那个对话）'),
-          ...sorted.map((s) => h('option', { key: s.id, value: s.id },
-            `${folder(s.cwd) || '（无文件夹）'}${s.blank ? '（空对话）' : ''}${s.live ? ' · 正在用' : ''}${fmtTime(s.updatedAt) ? ' · ' + fmtTime(s.updatedAt) : ''}`)),
+          ...sorted.slice(0, 25).map((s) => h('option', { key: s.id, value: s.id },
+            `${folder(s.cwd) || '（无文件夹）'}${s.blank ? '（空对话）' : ''}${s.live ? ' · 已打开' : ''}${fmtTime(s.updatedAt) ? ' · ' + fmtTime(s.updatedAt) : ''}`)),
+          sorted.length > 25 ? h('option', { value: '', disabled: true }, `（只列最近 25 个，共 ${sorted.length} 个）`) : null,
           (current && !known) ? h('option', { value: current }, '（原来选的对话，现在没找到）') : null,
         ),
         h('button', {
@@ -197,12 +198,12 @@ window.__ModuleLoader__.load({
           h('span', { style: { fontSize: 13, fontWeight: 600, color: bad ? '#c0392b' : C.text } },
             bad ? '出错了' : (running ? '正在监听' : '已暂停')),
           h('span', { style: { fontSize: 12, color: C.text3 } },
-            running ? (s.bound ? '（已选定 1 个抖音聊天）' : '（还没选定抖音聊天，不会工作）') : '（暂停时不看消息）'),
+            running ? (s.peerSet ? '（已选定要监听的抖音聊天）' : '（还没选定抖音聊天，不会工作）') : '（暂停时不看消息）'),
         ),
         h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 } },
-          cell('今天已回评论', quotaTxt),
+          cell('今天已回评论（评论区，不是私信）', quotaTxt),
           cell('最后一次看消息', s.lastRead ? `${s.lastRead}，读到 ${s.lastCount || 0} 条` : '还没看过'),
-          cell('读取方式', signedTxt, signedTone),
+          cell('连上的 DSH 对话', s.bound ? (s.bound + ' 个') : '还没连上'),
           cell('最后一次收到私信', s.lastWake || '还没有'),
         ),
         bad ? h('div', { style: { fontSize: 12, color: '#c0392b', marginTop: 8 } }, '出错原因：' + s.lastError) : null,
@@ -503,7 +504,7 @@ window.__ModuleLoader__.load({
           h(Row, { label: '监听哪个抖音聊天', hint: '填抖音私信列表里那个聊天的名字；点上面的按钮会自动填好，一般不用自己改' },
             h(TextField, { value: cfg.peer || '', placeholder: '例：鲜葱、', onCommit: (v) => save({ peer: v }) }),
           ),
-          h(Row, { label: '回复发到哪个对话', hint: '这里是 DSH 里的对话，不是抖音聊天。不选 = 发到最近在用的那个' },
+          h(Row, { label: '回复发到哪个对话', hint: '这些是 DSH 里的对话（按最近使用排序），不是抖音聊天。不选 = 发到最近在用的那个；选错了随时改' },
             h(SessionPicker, { current: cfg.sessionId || '', onPick: (v) => save({ sessionId: v }) }),
           ),
           h(Row, { label: '收到他的消息自动回', hint: '关掉 = 只提醒你，不回' }, h(Switch, { checked: !!cfg.ownerAutoReply, onChange: (v) => save({ ownerAutoReply: v }) })),
@@ -528,7 +529,7 @@ window.__ModuleLoader__.load({
               h('option', { value: 'ignore' }, '不回也不提醒'),
             ),
           ),
-          h(Row, { label: '多久看一次新消息', hint: '单位：秒，默认 30。填小了费电脑，填大了收到提醒慢' },
+          h(Row, { label: '多久看一次新消息', hint: '单位：秒。填太小费电脑，填太大收到提醒慢；框里现在这个数就是正在用的' },
             h('input', {
               type: 'number', min: 10, max: 3600, value: cfg.intervalSeconds,
               onChange: (e) => save({ intervalSeconds: Number(e.target.value) }),
@@ -541,7 +542,7 @@ window.__ModuleLoader__.load({
           h(Row, { label: '开启自动刷视频', hint: '关掉就完全不跑' }, h(Switch, { checked: !!cfg.autoScrollEnabled, onChange: (v) => save({ autoScrollEnabled: v }) })),
           h('div', { style: { padding: '10px 0 6px' } },
             h('div', { style: { fontSize: 13, color: C.text } }, '自动跑的时间段'),
-            h('div', { style: { fontSize: 12, color: C.text3, marginTop: 2 } }, '时、分分别选；跨零点直接选（18:30 → 09:00）'),
+            h('div', { style: { fontSize: 12, color: C.text3, marginTop: 2 } }, '时、分分别选；跨半夜也行，比如 18:30 到第二天 09:00'),
             h('div', { style: { marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 } },
               ...rows.map((r, i) => h('div', { key: 'w' + i, style: { display: 'flex', alignItems: 'center', gap: 8 } },
                 timeSel(i, 'start'),
@@ -560,7 +561,7 @@ window.__ModuleLoader__.load({
               }, '+ 添加时间段'),
             ),
           ),
-          h(Row, { label: '每天最多刷几条', hint: '0 = 不自动跑' },
+          h(Row, { label: '每天最多刷几条', hint: '填 0 = 不自动刷' },
             h('input', {
               type: 'number', min: 0, max: 50, value: cfg.autoScrollPerDay,
               onChange: (e) => save({ autoScrollPerDay: Number(e.target.value) }),
@@ -571,8 +572,8 @@ window.__ModuleLoader__.load({
         ),
 
         h(Card, { title: '日报（可选）' },
-          h(Row, { label: '写日报文件', hint: '默认关；开了才落 .md' }, h(Switch, { checked: !!cfg.autoScrollWriteReport, onChange: (v) => save({ autoScrollWriteReport: v }) })),
-          h(Row, { label: '日报目录', hint: '留空 = 当前工作区' },
+          h(Row, { label: '写日报文件', hint: '默认不生成；开了每天生成一份文本文件（记事本能打开）' }, h(Switch, { checked: !!cfg.autoScrollWriteReport, onChange: (v) => save({ autoScrollWriteReport: v }) })),
+          h(Row, { label: '日报目录', hint: '不填就存在当前工作文件夹里' },
             h('input', {
               value: cfg.autoScrollReportDir || '',
               onChange: (e) => save({ autoScrollReportDir: e.target.value }),
@@ -591,7 +592,7 @@ window.__ModuleLoader__.load({
           }, h(Switch, { checked: !!cfg.subtitleOcr, onChange: (v) => save({ subtitleOcr: v }) })),
         ),
         h(Card, { title: '人设', anchor: 'persona' },
-          h(Row, { label: '当前人设', hint: '挂进「被唤醒的那条会话」的系统提示词，每轮都在；换完下一条消息就生效，别的 Bot 看不到也不受影响' },
+          h(Row, { label: '当前人设', hint: '选定的人设会跟着它每条回复；换完下一条消息就生效，不用重启' },
             h('select', {
               value: cfg.personaPreset || '',
               onChange: (e) => mutatePersonas({ action: 'set-current', id: e.target.value }),
@@ -606,7 +607,7 @@ window.__ModuleLoader__.load({
           pNote ? h('div', { style: { fontSize: 12, color: '#d4380d', marginBottom: 6 } }, pNote) : null,
           personas && personas.list
             ? h('div', { style: { fontSize: 11, color: C.text3, margin: '-2px 0 6px' } },
-                '库文件 ' + personas.store + ' · 共 ' + personas.list.length + ' 条（内置三套只读，导入的能改名 / 停用 / 删除）')
+                '保存在本机 · 现有 ' + personas.list.length + ' 套（内置的不能改，你自己导入的能改名 / 停用 / 删除）')
             : null,
           h('div', { style: { padding: '8px 0 10px' } },
             personaRows.length
@@ -615,7 +616,7 @@ window.__ModuleLoader__.load({
           ),
           h('div', { style: { padding: '4px 0 12px', borderTop: '1px solid ' + C.line } },
             h('div', { style: { fontSize: 13, color: C.text, marginTop: 8 } }, '导入一套自己的'),
-            h('div', { style: { fontSize: 12, color: C.text3, marginTop: 2 } }, '存进库文件，跟插件一起留着；也可以直接选一个 .md，整篇当人设正文'),
+            h('div', { style: { fontSize: 12, color: C.text3, marginTop: 2 } }, '存一份在本机，跟插件一起留着；也可以直接选一个文本文件，整篇当人设正文'),
             h('div', { style: { display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' } },
               h('input', {
                 value: pDraft.name,
@@ -678,7 +679,7 @@ window.__ModuleLoader__.load({
               style: Object.assign({}, ctlBase, { width: '100%', height: 'auto', padding: 8, marginTop: 8, fontSize: 12, lineHeight: '18px', boxSizing: 'border-box' }),
             }),
           ),
-          h(Row, { label: '禁止词', hint: '逗号分隔；命中就拒绝发送（这些是 AI 最容易顺嘴说的客服腔）' },
+          h(Row, { label: '禁止词', hint: '不许出现的词，用逗号隔开（中英文逗号都行）；命中就整条不发。这些通常是 AI 最容易顺嘴说的客服腔' },
             h('input', {
               value: cfg.personaBannedWords || '',
               onChange: (e) => save({ personaBannedWords: e.target.value }),
@@ -714,7 +715,7 @@ window.__ModuleLoader__.load({
           ),
         ),
         h(Card, { title: '评论区自动回（可选）', anchor: 'autoreply' },
-          h(Row, { label: '自动回评论', hint: '总开关；关掉下面两项都不跑。开了就是公开回复，自己掂量' },
+          h(Row, { label: '自动回评论', hint: '总开关；关掉下面两项都不跑。开启后别人能看到你的回复' },
             h(Switch, { checked: !!cfg.commentAutoReply, onChange: (v) => save({ commentAutoReply: v }) }),
           ),
           // 2026-10-28 按主人要求拆成两类：自己作品下（正常互动）/ 别人视频下（容易被当刷屏）
@@ -724,7 +725,7 @@ window.__ModuleLoader__.load({
               onChange: (v) => save({ commentAutoReplyWork: v }),
             }),
           ),
-          h(Row, { label: '回别人视频下的楼中楼', hint: '有人回复了我的评论（在别人作品下）→ 我去接；容易被当刷屏，默认关' },
+          h(Row, { label: '回复别人在我评论下的留言', hint: '有人在你评论下面回你时，由它去接；容易被平台当成刷屏，默认关' },
             h(Switch, {
               checked: !!cfg.commentAutoReplyOthers,
               onChange: (v) => save({ commentAutoReplyOthers: v }),
@@ -754,7 +755,7 @@ window.__ModuleLoader__.load({
               style: Object.assign({}, ctlBase, { width: 100 }),
             }),
           ),
-          h(Row, { label: '作品发布超过几天就不回', hint: '按「作品发布多久」算，不是评论时间。老视频下面冒出来的新评论也不回；0 = 不限' },
+          h(Row, { label: '作品发布超过几天就不回', hint: '按作品发布时间算，不是评论时间。老视频下的新评论也不回；填 0 = 不限' },
             h('input', {
               type: 'number', min: 0, max: 365,
               value: Number(cfg.commentWorkMaxAgeDays) || 0,
@@ -762,7 +763,7 @@ window.__ModuleLoader__.load({
               style: Object.assign({}, ctlBase, { width: 100 }),
             }),
           ),
-          h(Row, { label: '这些账号不回', hint: '逗号分隔；机器人/平台客服号。它们的评论常被折叠 —— 回了服务端也查不到（假成功）' },
+          h(Row, { label: '这些账号不回', hint: '机器人或平台客服号，用逗号隔开。它们的评论常被折叠 —— 你这边提示发送成功，其实已被删掉' },
             h('input', {
               value: cfg.commentSkipNicks || '',
               onChange: (e) => save({ commentSkipNicks: e.target.value }),
@@ -773,7 +774,7 @@ window.__ModuleLoader__.load({
           h(Row, { label: '只有 @ 的不回', hint: '比如「@本鲸不胖」这种没有可接内容的：回"在呢"就像客服机器人' },
             h(Switch, { checked: cfg.commentSkipPureMention !== false, onChange: (v) => save({ commentSkipPureMention: v }) }),
           ),
-          h(Row, { label: '我的作品', hint: '作品链接或 id，逗号分隔。填了才"按评论列表批量看自己视频下的评论"；不填也会自动记住（收到作品评论通知时）' },
+          h(Row, { label: '我的作品', hint: '视频链接（抖音里点分享 → 复制链接），多个用逗号隔开。填了它才会主动去翻这些视频的评论；不填也会在收到评论通知时自己记住' },
             h('input', {
               value: cfg.myWorks || '',
               onChange: (e) => save({ myWorks: e.target.value }),
@@ -798,7 +799,7 @@ window.__ModuleLoader__.load({
             : null,
         ),
         h(Card, { title: '维护', anchor: 'maint' },
-          h(Row, { label: '浏览器窗口', hint: '平时后台跑就行。遇到验证码时点右边按钮：会弹出一个看得见的窗口，你手动划一下滑块，划完再切回后台' },
+          h(Row, { label: '浏览器窗口', hint: '平时让它后台跑。遇到验证码就点右边按钮：会弹出一个看得见的窗口，你手动划一下滑块，划完把左边选回「后台运行」就切回来了' },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               h('select', {
                 value: cfg.browserMode || 'headless',
@@ -840,7 +841,7 @@ window.__ModuleLoader__.load({
               }, switching ? '切换中…' : '打开窗口去验证'),
             ),
           ),
-          h(Row, { label: '清理浏览器缓存', hint: '删掉浏览器产生的临时文件；不会动你的抖音登录，也不会删聊天记录。另外会清掉收件箱里 7 天前的图片' },
+          h(Row, { label: '清理浏览器缓存', hint: '会删两样东西：浏览器产生的临时文件，和插件自己存下来的 7 天前私信图片副本。抖音里的聊天记录和登录状态都不动' },
             h('button', {
               type: 'button',
               onClick: () => {
@@ -865,7 +866,7 @@ window.__ModuleLoader__.load({
         // 结尾这张卡：真诚求个星（不弹窗、不打扰，就一个小按钮）
         h(Card, { title: '觉得好用？' },
           h('div', { style: { fontSize: 12, color: C.text2, lineHeight: '21px' } },
-            '要是这条赛博小鱼帮你省了点事，去仓库给它点个星吧。星星多一点，愿意一起修问题、加功能的人也会多一点，它才能活得更久。'),
+            '要是这条赛博小鱼帮你省了点事，可以在 GitHub 上给它点个星。星多一点，愿意一起修问题、加功能的人也会多一点，它才能活得更久。'),
           h('button', {
             type: 'button',
             onClick: () => { try { window.open('https://github.com/miqian-nomad/dsh-douyin-watch', '_blank') } catch { /* 打不开就算了 */ } },
