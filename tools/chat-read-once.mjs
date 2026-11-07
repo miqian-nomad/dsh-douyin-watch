@@ -21,7 +21,7 @@
  *   ⚠️ note 必须"只在真发生"时出现：2026-10-25 就是误报「验证码中间页」把用户骗去重新登录的。
  *   ⚠️ 打开会话靠**页面内派发事件**（见 OPEN_PEER 的注释），原生鼠标事件在这行上不生效。
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { openPage, sleep } from '../lib/chrome.mjs'
@@ -118,6 +118,32 @@ const READ_SCRIPT = `(function () {
 // ⚠️ 2026-10-25 用户指出的关键事实：停在右栏那块底图（一个圆圈 logo）时，
 //    messageMessageBox 这些节点**依然挂在 DOM 里**，只是不可见 / 滚到视口外，
 //    所以"节点存在"不能当成"会话已打开"。用户实测：得点左边那行的头像或名字才会跳出来。
+// ── 打开后回头验收：右边这条会话到底是不是目标（2026-11-07 加）─────────────
+//   为什么要：老版本点开就默认"是我要的那条"，左栏又是按昵称匹配的。
+//   两个同名会话 → 点错 → 读回来照样唤醒，等于把陌生人当主人。
+//   现在先取右栏会话的对端 sec_uid（React fiber 里的 toParticipantSecUserId），
+//   拿不到就退一步用右栏标题；两者都拿不到才认"没法验收"。
+const OPENED_PEER = `(function () {
+  var secOf = function (n) {
+    var fk = Object.keys(n).find(function (k) { return k.indexOf('__reactFiber$') === 0 });
+    if (!fk) return '';
+    var f = n[fk], d = 0;
+    while (f && d < 14) {
+      var p = f.memoizedProps;
+      if (p && p.conversation && p.conversation.toParticipantSecUserId) return String(p.conversation.toParticipantSecUserId);
+      f = f.return; d++;
+    }
+    return '';
+  };
+  var msgs = document.querySelectorAll('[class*="messageMessageBox"]');
+  for (var i = 0; i < msgs.length; i++) { var s = secOf(msgs[i]); if (s) return JSON.stringify({ sec: s, via: 'msg' }); }
+  var h = document.querySelector('[class*="RightPanelHeadertitle"]');
+  var title = h ? String(h.innerText || '').trim() : '';
+  var t = h;
+  for (var j = 0; t && j < 6; j++) { var s2 = secOf(t); if (s2) return JSON.stringify({ sec: s2, title: title, via: 'head' }); t = t.parentElement; }
+  return JSON.stringify({ sec: '', title: title, via: 'none' });
+})()`
+
 const PANEL_STATE = `(function () {
   var vis = 0, total = 0;
   Array.prototype.forEach.call(document.querySelectorAll('[class*="messageMessageBox"]'), function (n) {
@@ -293,6 +319,35 @@ try {
     try { return JSON.parse(raw) || [] } catch { return [] }   // 页面没准备好
   }
   const opened = await openConversation(c.ev, c.send)   // 里面已经把等待算好了
+
+  // —— 打开后回头验收：确认这条会话就是目标；顺手把 sec_uid 记下来 ——
+  let idn = {}
+  try { idn = JSON.parse(String(await c.ev(OPENED_PEER))) || {} } catch { idn = {} }
+  const wantSec = String(TOID || '').trim()
+  const wantNick = String(TO || '').trim()
+  let verified = null                      // null = 页面没给出身份，没法验收
+  if (idn.sec && wantSec) verified = idn.sec === wantSec
+  else if (!idn.sec && wantNick && idn.title) verified = idn.title === wantNick || idn.title.indexOf(wantNick) === 0
+  // 验收没失败、页面又给出了 sec_uid、而本地还没记 → 记住它，以后按 ID 精确找（同名/改名都不怕）
+  if (verified !== false && idn.sec && idn.sec !== String(peerCfg.sec_uid || '')) {
+    try {
+      writeFileSync(join(homeDir({ create: false }), 'peer.json'), JSON.stringify({
+        nick: peerCfg.nick || wantNick || idn.title || '',
+        sec_uid: idn.sec,
+        updated: new Date().toISOString(),
+      }, null, 2))
+    } catch { /* 记不住不影响这一轮 */ }
+  }
+  if (verified === false) {
+    c.close()
+    await sleep(200)
+    out({
+      ok: true, messages: [], verified: false,
+      peer: { sec: idn.sec || '', title: idn.title || '' },
+      note: '打开的会话不是目标（页面是「' + (idn.title || idn.sec || '未知') + '」，目标是「' + (wantNick || wantSec) + '」）——这一轮不读，避免读错人',
+    })
+    throw { __done: true }
+  }
   let list = await readNow()
   if (!list.length && opened) {       // 面板确实开着、但这一拍没解析出来 → 再等一拍重读
     await sleep(1500)
@@ -308,9 +363,10 @@ try {
   }
   c.close()
   await sleep(200)
+  const meta = { verified, peer: { sec: idn.sec || '', title: idn.title || '' } }
   out(note
-    ? { ok: true, messages: Array.isArray(list) ? list : [], url: href, note }
-    : { ok: true, messages: Array.isArray(list) ? list : [] })
+    ? { ok: true, messages: Array.isArray(list) ? list : [], url: href, note, ...meta }
+    : { ok: true, messages: Array.isArray(list) ? list : [], ...meta })
 } catch (e) {
   if (!(e && e.__done)) out({ ok: false, error: String(e?.message ?? e) })
 }

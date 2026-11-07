@@ -454,11 +454,8 @@ window.__ModuleLoader__.load({
         h(StatusCard, { s: status, q: cfg.commentQuota }),
 
         h(Card, { title: '私信哨兵', anchor: 'mail' },
-          h(Row, { label: '要盯的会话昵称', hint: '私信列表里那个会话显示的名字；填了才算「在盯」，空着等于不工作' },
+          h(Row, { label: '要盯的会话昵称', hint: '私信列表里那个会话显示的名字；填了才算「在盯」。插件会自己记住这条会话的身份，重名、改名都不影响' },
             h(TextField, { value: cfg.peer || '', placeholder: '例：鲜葱、', onCommit: (v) => save({ peer: v }) }),
-          ),
-          h(Row, { label: '主人昵称', hint: '你自己的抖音昵称；和上面一致时才算「主人」，否则按陌生人处理' },
-            h(TextField, { value: cfg.owner || '', placeholder: '例：鲜葱、', onCommit: (v) => save({ owner: v }) }),
           ),
           h(Row, { label: '钉死会话', hint: '只往这条会话投递；它没开着会自动恢复（resume）。新建的会话点「刷新」就出现' },
             h(SessionPicker, { current: cfg.sessionId || '', onPick: (v) => save({ sessionId: v }) }),
