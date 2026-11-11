@@ -24,6 +24,7 @@
  *         reply_hint, stale }] }], error?, code? }
  */
 import { openPage, sleep } from '../lib/chrome.mjs'
+import { classifyPageState } from '../lib/gate-state.mjs'
 
 const argv = process.argv.slice(2)
 const argOf = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? (argv[i + 1] ?? d) : d }
@@ -128,6 +129,9 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
         cid: String(c.cid || ''),
         nick: String(u.nickname || ''),
         uid: String(u.uid || ''),
+        // 2026-11-13：这条是不是我自己发的。uid 拿得到就给 true/false，
+        //   拿不到给 null（= 分不清），让调用方别把"分不清"当成"不是我"。
+        mine: authorUid ? (String(u.uid || '') === authorUid) : null,
         text: String(c.text || '').replace(/\\s+/g, ' ').slice(0, 160),
         time: Number(c.create_time || 0),
         // 只作参考：抖音经常给 undefined，**不拿它当"要不要探"的依据**
@@ -183,6 +187,8 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
           cid: String(c.cid || ''),
           nick: String(u.nickname || ''),
           uid: String(u.uid || ''),
+          // 同上：子回复也可能是"我自己回别人那句"，拿不到 uid 就是 null（分不清）
+          mine: authorUid ? (String(u.uid || '') === authorUid) : null,
           text: String(c.text || '').replace(/\\s+/g, ' ').slice(0, 160),
           time: Number(c.create_time || 0),
           root_cid: rootCid,
@@ -270,6 +276,7 @@ const STATE_JS = `(function(){
     hasVideo: !!document.querySelector('video'),
     verifyVisible: vis,
     verify: vis || /验证码|安全验证|验证中|验证失败/.test(t),
+    bodyText: String(document.body && document.body.innerText || '').slice(0, 600),
     blank: String(location.href) === 'about:blank'
   });
 })()`
@@ -296,8 +303,13 @@ for (let attempt = 1; attempt <= 3 && !done; attempt++) {
       try { st = JSON.parse(String(await withTimeout(c.ev(STATE_JS), 15000, '探页面状态'))) || {} } catch { st = {} }
     }
     if (st.verify) {
+      // 2026-11-13：不再自己判断"是不是验证码"，交给 lib/gate-state.mjs ——
+      //   拿不准就报 unknown（附看到的证据），绝不冒充验证码（2026-10-25 误报教训）
+      const v = classifyPageState({ title: st.title, href: st.href, verifyVisible: st.verifyVisible, bodyText: st.bodyText })
       out({
-        ok: false, code: 'verify_required', error: VERIFY_HINT,
+        ok: false,
+        code: v.kind === 'verify' ? 'verify_required' : (v.kind === 'login' ? 'login_required' : 'state_unknown'),
+        state: v.kind, evidence: v.evidence, error: VERIFY_HINT,
         page: { href: st.href, title: st.title, verify_visible: st.verifyVisible },
       })
       done = true

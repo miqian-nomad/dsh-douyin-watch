@@ -222,9 +222,15 @@ window.__ModuleLoader__.load({
       const [pOpen, setPOpen] = useState(null);   // 查看全文：{ id, name, text }
       const [pEdit, setPEdit] = useState(null);   // 改名中：{ id, name }
       const [pDraft, setPDraft] = useState({ name: '', text: '' }); // 导入草稿
-      // 2026-11-07：认领主人（读当前打开会话的 sec_uid，之后等对方发消息验证）
+      // 2026-11-07：认领主人（读当前打开会话的 sec_uid，点完即生效；0.4.14 起没有"等消息验证"这一步）
       const [claimBusy, setClaimBusy] = useState(false);
       const [claimMsg, setClaimMsg] = useState('');
+      // 2026-11-13：被抖音拦住时的「我已处理，继续」（闸门状态在后端，这里只是放出来）
+      const [gateBusy, setGateBusy] = useState(false);
+      const [gateMsg, setGateMsg] = useState('');
+      // 2026-11-13：清除本机记录的「这个账号自己是谁」
+      const [selfBusy, setSelfBusy] = useState(false);
+      const [selfMsg, setSelfMsg] = useState('');
       // 2026-11-07：检查一下（对齐 dsh-mobile 的一键诊断）+ 高级折叠
       const [checkBusy, setCheckBusy] = useState(false);
       const [checks, setChecks] = useState(null);
@@ -394,6 +400,32 @@ window.__ModuleLoader__.load({
           .catch(() => { setClaimBusy(false); setClaimMsg('失败：接口没回应'); });
       };
 
+      // 2026-11-13：主人说「我已经处理了」→ 后端先探一次页面，再决定放行 / 提示还没好
+      const resumeGate = () => {
+        setGateBusy(true); setGateMsg('');
+        fetch('/api/douyin-watch/resume', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+          .then((r) => r.json())
+          .then((d) => {
+            setGateBusy(false);
+            setCfg((d && d.config) || cfg);
+            setGateMsg(d && d.warned ? ('已放行，但页面看着还不正常：' + ((d.note) || '')) : (d && d.ok ? '已恢复，继续干活' : '没成功：' + ((d && d.note) || '接口没回应')));
+          })
+          .catch(() => { setGateBusy(false); setGateMsg('失败：接口没回应'); });
+      };
+
+      // 2026-11-13：清掉本机记的「我自己是谁」——只删 self.json，不碰主人那份 owner.json
+      const clearSelf = () => {
+        setSelfBusy(true); setSelfMsg('');
+        fetch('/api/douyin-watch/self-clear', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+          .then((r) => r.json())
+          .then((d) => {
+            setSelfBusy(false);
+            setCfg((d && d.config) || cfg);
+            setSelfMsg(d && d.ok ? '已清除，下次扫到评论会重新学' : '清除失败');
+          })
+          .catch(() => { setSelfBusy(false); setSelfMsg('失败：接口没回应'); });
+      };
+
       // 失败时别再一直显示「加载中…」：把 note 里的错误直接显示出来（2026-10-24：那次 400 就是这么被吞掉的）
       if (!cfg || !rows) return h('div', { style: { padding: 16, fontSize: 13, color: note ? '#c0392b' : C.text3 } }, note || '加载中…');
 
@@ -500,6 +532,71 @@ window.__ModuleLoader__.load({
         ),
 
         h(StatusCard, { s: status, q: cfg.commentQuota, sessionId: cfg.sessionId }),
+
+        // 2026-11-13：本机记录的「这个抖音账号自己」（≠ 上面那位主人）
+        (() => {
+          const me = cfg && cfg.self
+          const txt = me && me.stored
+            ? ('已记住：' + (me.nick || '（没学到昵称）') + (me.uid ? '（ID ' + me.uid + '）' : '') + (me.learned_at ? ' · ' + String(me.learned_at).slice(0, 10) : ''))
+            : '还没记住（等下一次评论区扫描自动学；也可以现在清掉让它重学）'
+          return h('div', null,
+            h(Row, {
+            label: '这个账号自己是谁',
+            hint: '只存你这个抖音号的 uid 和昵称，用来判断"这条评论是不是我发的"。和上面那位主人是两回事',
+          },
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+              h('span', { style: { fontSize: 12.5, color: C.text2 } }, txt),
+              h('button', {
+                type: 'button', disabled: selfBusy, onClick: clearSelf,
+                style: Object.assign({}, btnBase, { cursor: selfBusy ? 'default' : 'pointer' }),
+              }, selfBusy ? '清除中…' : '清除本机记录'),
+            ),
+            ),
+            selfMsg ? h('div', { style: { fontSize: 12, color: C.text2, padding: '0 0 8px' } }, selfMsg) : null,
+          )
+        })(),
+
+        // 2026-11-13：被拦住时置顶一条，别指望主人去翻日志
+        (() => {
+          const g = cfg && cfg.gate
+          if (!g || !g.kind || g.kind === 'ok') return null
+          const bad = g.kind === 'verify' || g.kind === 'login'
+          return h('div', {
+            style: {
+              border: '1px solid ' + (bad ? '#c0392b' : '#d68910'),
+              background: bad ? '#fdecea' : '#fef5e7',
+              borderRadius: 12, padding: '12px 16px', margin: '10px 0 0',
+            },
+          },
+            h('div', { style: { fontSize: 13.5, fontWeight: 600, color: bad ? '#c0392b' : '#9c640c' } },
+              bad ? '⚠️ 需要你本人处理一下（插件已经停手）' : '⏸ 先停了一小会儿'),
+            h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '19px', marginTop: 4 } }, g.text || ''),
+            g.reason ? h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 4 } }, '看到的证据：' + g.reason) : null,
+            g.lastProbe && g.lastProbe.evidence
+              ? h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 2 } }, '最近一次自动检查：' + g.lastProbe.evidence)
+              : null,
+            bad ? h('button', {
+              type: 'button', disabled: gateBusy, onClick: resumeGate,
+              style: Object.assign({}, btnBase, { marginTop: 8, cursor: gateBusy ? 'default' : 'pointer' }),
+            }, gateBusy ? '检查中…' : '我已处理，继续') : null,
+            gateMsg ? h('div', { style: { fontSize: 12, color: C.text2, marginTop: 6 } }, gateMsg) : null,
+          )
+        })(),
+
+        // 2026-11-13：定时体检不正常时提示（只提示，不拦主流程）
+        (() => {
+          const hp = cfg && cfg.health
+          if (!hp || !hp.state || hp.state === 'ok') return null
+          return h('div', {
+            style: { border: '1px solid #d68910', background: '#fef5e7', borderRadius: 12, padding: '10px 16px', margin: '8px 0 0' },
+          },
+            h('div', { style: { fontSize: 12.5, fontWeight: 600, color: '#9c640c' } }, '⚠️ 评论区接口体检不正常'),
+            h('div', { style: { fontSize: 12, color: C.text2, marginTop: 3 } },
+              (hp.text || '') + (hp.evidence ? '（' + hp.evidence + '）' : '')),
+            h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 3 } },
+              '这是每 ' + (cfg.probeHours || 6) + ' 小时一次的体检，只在状态变化时提醒；不影响私信和评论的日常运行'),
+          )
+        })(),
 
         h(Card, { title: '私信监听', anchor: 'mail' },
           // 2026-11-07：第一句先说结果 —— 小白反馈"全页没有一句说清是谁的号发出去的"
