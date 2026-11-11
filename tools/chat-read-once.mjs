@@ -25,6 +25,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { openPage, sleep } from '../lib/chrome.mjs'
+import { classifyPageState } from '../lib/gate-state.mjs'
 import { homeDir } from '../lib/paths.mjs'
 
 const argv = process.argv.slice(2)
@@ -270,7 +271,8 @@ const PAGE_STATE = `(function () {
     verify: vis || /验证码|安全验证|验证中/.test(t),
     iframeVisible: vis,
     hasChat: hasChat,
-    needsLogin: needsLogin
+    needsLogin: needsLogin,
+    bodyText: body.slice(0, 600)
   });
 })()`
 
@@ -315,7 +317,9 @@ try {
     const st = await pageState(c)
     c.close()
     await sleep(200)
-    out({ ok: true, messages: [], url: href, note: whyStuck(st, href) })
+    // 2026-11-13：把「页面真实状态」分类一起报上去，别只给一句人话（调用方要据此停手）
+    const v = classifyPageState({ title: st.title, href, verifyVisible: !!(st.iframeVisible || st.verify), bodyText: st.bodyText, messageCount: st.hasChat ? 1 : 0 })
+    out({ ok: true, messages: [], url: href, note: whyStuck(st, href), state: v.kind, evidence: v.evidence })
     throw { __done: true }
   }
   await sleep(1500)
@@ -362,9 +366,11 @@ try {
     list = await readNow()
   }
   let note = ''
+  let verdict = { kind: 'ok', evidence: '' }
   if (!list.length) {
     // 真的一条都没有 → 必须说清原因，别报成「没有新消息」（调用方会写日志+设置页）
     const st = await pageState(c)
+    verdict = classifyPageState({ title: st.title, href, verifyVisible: !!(st.iframeVisible || st.verify), bodyText: st.bodyText, messageCount: st.hasChat ? 1 : 0 })
     if (st.verify || st.needsLogin) note = whyStuck(st, href)
     else if (!opened) note = `没能打开「${TO || TOID || '对端'}」的会话（点昵称/头像都没跳出来：左栏没加载，或登录态已掉）`
     else note = '会话面板里读不到消息（打开后重读两次都空），下一轮再试'
@@ -373,7 +379,7 @@ try {
   await sleep(200)
   const meta = { verified, peer: { sec: idn.sec || '', title: idn.title || '' } }
   out(note
-    ? { ok: true, messages: Array.isArray(list) ? list : [], url: href, note, ...meta }
+    ? { ok: true, messages: Array.isArray(list) ? list : [], url: href, note, state: verdict.kind, evidence: verdict.evidence, ...meta }
     : { ok: true, messages: Array.isArray(list) ? list : [], ...meta })
 } catch (e) {
   if (!(e && e.__done)) out({ ok: false, error: String(e?.message ?? e) })

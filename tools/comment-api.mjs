@@ -59,10 +59,6 @@ if (wantsMention && !MENTION.name && !MENTION.secUid && !MENTION.uid) {
   out({ ok: false, error: '@ 谁没给（--mention-name 或 --mention-secuid）' }); process.exit(1)
 }
 
-async function cdpReady() {
-  try { return (await fetch(`${CDP}/json/version`)).ok } catch { return false }
-}
-
 try {
   const c = await openPage()
   const chromed = c.status

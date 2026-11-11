@@ -64,6 +64,10 @@ import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { checkPublicComment, recordPublicComment, guardStats, repliedTargets, ledgerHasTarget, setGuardHome, guardFile } from './lib/outbound-guard.mjs'
 import { pickReplyTargets, buildCommentPrompt } from './lib/notice-queue.mjs'
+import { classifyCommentSelf } from './lib/comment-self.mjs'
+import { classifyPageState, decideGate, gateAllows, gateText, GATE, NEEDS_OWNER } from './lib/gate-state.mjs'
+import { resolveSelfIdentity, mergeLearned, normalizeStore } from './lib/self-identity.mjs'
+import { classifyCommentProbe, probeText as probeTextOf, PROBE } from './lib/comment-probe.mjs'
 import { PERSONA_PRESETS, personaById } from './lib/personas.mjs'
 import { listPersonas, resolvePersona, personaText, mutate as mutatePersonas, storePath } from './lib/persona-store.mjs'
 
@@ -113,6 +117,8 @@ const DEFAULTS = {
   // 画面硬字幕 OCR（默认关）。开了才逐帧 OCR 原片，能拿到逐句精确、带时间轴的字幕，
   // 代价是纯 CPU 满载：2 分钟的视频约多花 5 分钟。不依赖显卡，所以谁都跑得动。
   subtitleOcr: false,
+  // 2026-11-13：评论区接口定时体检（小时）。0 = 关掉；范围 1–72；不填默认 6
+  probeHours: 6,
   onlyNewest: true,
   // ⭐ 钉死一个会话（可带/不带 session- 前缀）。设了它就**不再靠 agent/created + cwd 去"逮" agent**：
   //    先找活着的；没有就 ctx.agents.resume() 把那条会话恢复出来再投递。
@@ -189,6 +195,8 @@ const DEFAULTS = {
   chatReadScript: join(HERE, 'tools', 'chat-read-once.mjs'),
   // 2026-11-07：认领主人 —— 读"当前打开的那条会话"的对端身份，写 owner.json
   claimScript: join(HERE, 'tools', 'claim-owner.mjs'),
+  // 2026-11-13：闸门挡住之后，用它轻量探一眼「主人处理完没有」（只读，不导航）
+  pageStateScript: join(HERE, 'tools', 'page-state.mjs'),
   cookieSaveScript: join(HERE, 'tools', 'cookie-save.mjs'),
   cookieLoadScript: join(HERE, 'tools', 'cookie-load.mjs'),
   commentApiScript: join(HERE, 'tools', 'comment-api.mjs'),
@@ -379,7 +387,10 @@ export function apply(ctx, config) {
   //    enabled=false 时 apply() 会提前 return，若它们仍用 const 声明在后面，
   //    view() 里的 watched.size 就抛 TDZ 异常 → 接口 400 → 设置页永远「加载中…」。
   const watched = new Map() // agent -> dispose()
-  const runtime = { lastReadAt: 0, lastCount: 0, lastFresh: 0, lastWakeAt: 0, lastError: String() } // 给设置页看的状态
+  const runtime = { lastReadAt: 0, lastCount: 0, lastFresh: 0, lastWakeAt: 0, lastError: String(), gate: null } // 给设置页看的状态
+  // 2026-11-13：blocked = 「需要主人处理」或「限流冷却中」；见 lib/gate-state.mjs
+  //   gate = { kind, at, reason, retryAt, needsOwner, where, noticed }
+  const gateProbeGapMs = 3 * 60e3   // 挡住时每 3 分钟轻量探一次页面（只读，不发起业务请求）
   // 2026-11-07：读私信那一步的"验收结果"（打开的是不是目标会话、对端 sec_uid 是多少）。
   //   读取脚本会回头核对右栏身份，结果放这里给唤醒判断用 —— 必须放在插件外层作用域，
   //   放小函数里 watchAgent 看不到（实测报 lastReadMeta is not defined）。
@@ -390,7 +401,7 @@ export function apply(ctx, config) {
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
   // 2026-11-07：补上 peer / owner —— 这两个是「要盯的会话昵称」和「主人昵称」，
   //   以前根本不在白名单里，设置页就算发上来也会被写盘循环丢掉（issue #1 的根因）。
-  const TOGGLE_KEYS = ['enabled', 'peer', 'owner', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaPreset', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir', 'subtitleOcr']
+  const TOGGLE_KEYS = ['enabled', 'peer', 'owner', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaPreset', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir', 'subtitleOcr', 'probeHours']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -450,7 +461,7 @@ export function apply(ctx, config) {
           o.status.signed = existsSync(signScript)
           o.status.signedDeps = existsSync(join(pyRoot, 'curl_cffi')) && existsSync(join(pyRoot, 'cryptography'))
         } catch { o.status.signed = false; o.status.signedDeps = false }
-        o.commentQuota = guardStats({ perHour: cfg.commentPerHour, perDay: cfg.commentPerDay }); o.commentScan = runtime.lastCommentScan || null; return o }
+        o.commentQuota = guardStats({ perHour: cfg.commentPerHour, perDay: cfg.commentPerDay }); o.commentScan = runtime.lastCommentScan || null; o.self = (() => { try { const st = readSelfStore(); const c = st.current; return c ? { stored: true, uid: c.uid ? (c.uid.slice(0, 6) + '…') : '', nick: c.nick || '', learned_at: c.learned_at || '' } : { stored: false } } catch { return { stored: false } } })(); o.health = runtime.healthState || null; o.probeHours = healthHours(); o.gate = runtime.gate ? { kind: runtime.gate.kind, at: runtime.gate.at, reason: runtime.gate.reason || '', retryAt: Number(runtime.gate.retryAt) || 0, needsOwner: !!runtime.gate.needsOwner, where: runtime.gate.where || '', text: gateText(runtime.gate), lastProbe: runtime.gate.lastProbe || null } : null; return o }
         const pathname = (req.url || '').split('?')[0]
         // GET /api/douyin-watch/sessions —— 给设置页的「钉死会话」选择器（只读）
         //   优先问 DSH 自己的会话服务（就是 GUI 会话列表那份数据）；拿不到再扫 ~/.dsh/sessions 目录。
@@ -599,28 +610,62 @@ export function apply(ctx, config) {
           })
         }
         // 2026-11-07：检查一下 —— 三项自检，结果直接铺在设置页（对齐 dsh-mobile 的"一键诊断"）
+        // 2026-11-13：加一道闸门检查 —— 让大家一眼看到"现在是不是被拦着"
+        if (req.method === 'POST' && pathname === '/api/douyin-watch/self-clear') {
+          // 2026-11-13：清除本机记录的「我自己是谁」（self.json）。只删这一份，不碰 owner.json
+          const ok = clearSelfStore()
+          log(ok ? '已清除本机账号记录（self.json），下次扫到评论会重新学' : '清除本机账号记录失败')
+          return sendJson(200, { ok, config: await view() })
+        }
+        if (req.method === 'POST' && pathname === '/api/douyin-watch/resume') {
+          const before = runtime.gate ? String(runtime.gate.kind) : ''
+          // 先探一次再放行：主人说处理完了，但页面要是还拦着，就别假装恢复
+          let probe = null
+          try {
+            const r = await runNode(cfg.pageStateScript, [], 60000)
+            probe = (r && r.parsed) || null
+          } catch (e) { probe = { state: 'unknown', evidence: String((e && e.message) || e) } }
+          if (probe && probe.state === GATE.OK) {
+            clearGate('主人手动点「我已处理，继续」')
+            log('主人确认已处理，闸门解除（探针也确认页面正常）')
+            return sendJson(200, { ok: true, cleared: true, probe, config: await view() })
+          }
+          clearGate('主人手动点「我已处理，继续」（探针没确认，先放行一次）')
+          return sendJson(200, {
+            ok: true, cleared: true, warned: true, probe,
+            note: '已经先放行了，但探针看到页面还不正常（' + String((probe && probe.evidence) || '没拿到原因') + '）；下一轮要是又被拦会再停',
+            config: await view(),
+          })
+        }
         if (req.method === 'POST' && pathname === '/api/douyin-watch/doctor') {
           const checks = []
           try {
             const r = await runNode(cfg.claimScript, ['--dry'])
             const p = r && r.parsed
-            const okPage = !!(p && p.ok)
+            // 「页面打开了」和「拿到了 ID」是两件事（issue #2）：拿不到 ID 时脚本返回 ok:false
+            //   但会给 page_ok:true —— 页面那项该是 ✓，别让用户以为浏览器坏了。
+            const okPage = !!(p && (p.page_ok === true || p.ok))
             checks.push({
               key: 'page',
               name: '能打开抖音私信页',
               ok: okPage,
-              detail: okPage ? ('现在页面上是「' + (p.nick || '没认出名字') + '」') : String((p && p.error) || (r && r.raw) || '打不开'),
+              detail: okPage
+                ? ('现在页面上是「' + (p.nick || '没认出名字') + '」' + (p.sec_uid ? '' : '（页面没给出 ID）'))
+                : String((p && p.error) || (r && r.raw) || '打不开'),
             })
             if (okPage) {
               const claim = readOwnerClaim()
               const same = !!(claim && claim.sec_uid && p.sec_uid && claim.sec_uid === p.sec_uid)
+              let whoDetail
+              if (!claim) whoDetail = '还没设过，先点上面的按钮'
+              else if (same) whoDetail = '对上了：' + (claim.nick || '（没名字）')
+              else if (!p.sec_uid) whoDetail = '现在打开的是「' + (p.nick || '') + '」，页面没给出 ID，没法按 ID 核对'
+              else whoDetail = '现在打开的是「' + (p.nick || '') + '」，跟设定的「' + (claim.nick || '') + '」不是一个'
               checks.push({
                 key: 'who',
                 name: '屏幕上这个人就是你说的那个人',
                 ok: claim ? same : false,
-                detail: claim
-                  ? (same ? ('对上了：' + (claim.nick || '（没名字）')) : ('现在打开的是「' + (p.nick || '') + '」，跟设定的「' + (claim.nick || '') + '」不是一个'))
-                  : '还没设过，先点上面的按钮',
+                detail: whoDetail,
               })
             }
           } catch (e) {
@@ -639,10 +684,34 @@ export function apply(ctx, config) {
             checks.push({ key: 'session', name: '回复能发到 DSH 对话', ok: false, detail: String((e && e.message) || e) })
           }
           log('检查一下：' + checks.map((c) => (c.ok ? '✓' : '✗') + c.name).join(' / '))
+          // 2026-11-13：闸门状态单独一条 —— 被拦时这里必须是 ✗，别让面板显示"一切正常"
+          const g = runtime.gate
+          checks.push({
+            key: 'gate',
+            name: '没有被抖音拦住',
+            ok: !(g && g.kind && g.kind !== GATE.OK),
+            detail: (g && g.kind && g.kind !== GATE.OK)
+              ? gateText(g)
+              : '没有发现验证码或登录异常',
+          })
+          // 2026-11-13：签名自检 —— 一次跑三种签名做对照，分清是哪一层坏了
+          try {
+            const pr = await runNode(join(HERE, 'tools', 'comment-probe.mjs'), [], 120000)
+            const pp = (pr && pr.parsed) || {}
+            checks.push({
+              key: 'comment-api',
+              name: '评论区接口能拿到评论',
+              ok: !!pp.ok,
+              detail: String(pp.text || '没拿到结论') + (pp.evidence ? '（' + String(pp.evidence) + '）' : ''),
+            })
+          } catch (e) {
+            checks.push({ key: 'comment-api', name: '评论区接口能拿到评论', ok: false, detail: String((e && e.message) || e) })
+          }
           return sendJson(200, { ok: true, checks })
         }
         // 2026-11-07：认领主人 —— 读"当前打开的那条会话"的对端身份，写 owner.json。
-        //   之后那个人再发一条消息过来，哨兵读到才把 verified_at 写上（真正锁定）。
+        //   0.4.14 起「认领即生效」：verified_at 就在认领那一刻写上，不再等他发消息。
+        //   issue #2：页面拿不到 sec_uid 时，脚本改为返回 ok:false（保留旧值 / 永不写空串）。
         if (req.method === 'POST' && pathname === '/api/douyin-watch/claim') {
           const r = await runNode(cfg.claimScript, [])
           const p = r && r.parsed
@@ -747,8 +816,8 @@ export function apply(ctx, config) {
 
   // ── 主人认领（2026-11-07）──────────────────────────────────────────────────
   //   认领 = 用户主动指认"这条会话里的人就是主人"（读当前打开会话的 sec_uid）。
-  //   验证 = 认领之后那个人再发来一条消息，哨兵读到才把 verified_at 写上。
-  //   为什么两步：认领只是"点开的那条"，可能点错；真收到他发来的消息才算锁定。
+  //   0.4.14 起认领即生效（verified_at 当场写），**没有**"等他发条消息才锁定"那一步 ——
+  //   README 与代码注释一度还停在那套两步说法上，issue #2 一并纠正。
   const ownerFile = () => join(cfg.home || HOME, 'owner.json')
   function readOwnerClaim() {
     try {
@@ -765,8 +834,146 @@ export function apply(ctx, config) {
       }
     } catch { return null }
   }
-  function writeOwnerClaim(rec) {
-    try { writeFileSync(ownerFile(), JSON.stringify(rec, null, 2)); return true } catch (e) { log('写 owner.json 失败：' + ((e && e.message) || e)); return false }
+  // 2026-11-13：writeOwnerClaim 已删。0.4.14「认领即生效」之后不再有"等他发条消息才验证"
+  //   这一步，它成了没人调的死函数（当年在 509c60c 里由哨兵首次读到主人消息时写入）。
+  //   现在 verified_at 只在认领那一刻由 tools/claim-owner.mjs 写。
+
+  // ── 闸门：被拦了就停手，等主人处理（2026-11-13）──────────────────────────────
+  //   以前：遇到验证码只写日志 + return 跳过这一轮，下一轮照旧去撞 —— 验证码不会自己消失，
+  //   撞十次还是十次，还可能把账号撞坏，主人不翻日志根本不知道。
+  //   现在：verify / login → 钉住状态、不再自动发起业务动作，只允许每 3 分钟一次只读探针；
+  //         rate → 冷却到期自动继续；unknown → 短冷却，并如实说"没看懂"、不冒充验证码。
+  function enterGate(verdict, where) {
+    const d = decideGate({ verdict, now: Date.now() })
+    if (d.action === 'clear') { clearGate('页面恢复正常'); return }
+    const prev = runtime.gate || {}
+    // 同一类坏法不重复刷日志/不重复叫醒（避免每轮吵一次）
+    const same = prev.kind === d.kind
+    runtime.gate = {
+      kind: d.kind,
+      at: same ? Number(prev.at || Date.now()) : Date.now(),
+      reason: d.reason,
+      retryAt: d.retryAt,
+      needsOwner: d.needsOwner,
+      where: where || prev.where || '',
+      noticed: same ? !!prev.noticed : false,
+      lastProbeAt: Number(prev.lastProbeAt || 0),
+      lastProbe: prev.lastProbe || null,
+    }
+    runtime.lastError = gateText(runtime.gate)
+    if (!same) {
+      log((d.needsOwner ? '⛔ 需要主人处理：' : '⏸ 先停一会儿：') + gateText(runtime.gate)
+        + '（来源：' + (where || '未知') + '；证据：' + (d.reason || '无') + '）')
+    }
+    // 只叫醒一次：让 agent 用自己的私信通道告诉主人（插件本身不发私信）
+    if (d.needsOwner && !runtime.gate.noticed) {
+      runtime.gate.noticed = true
+      notifyOwnerByAgent(where).catch(() => {})
+    }
+  }
+
+  function clearGate(why) {
+    const prev = runtime.gate
+    if (!prev || !prev.kind || prev.kind === GATE.OK) return
+    runtime.gate = null
+    if (runtime.lastError === gateText(prev)) runtime.lastError = ''
+    log('✅ 闸门解除（' + (why || '页面恢复') + '），继续干活')
+  }
+
+  // 让 agent 在它自己的会话里说一句（它能用 douyin_send 私信主人）。
+  //   为什么不让插件直接发：私信是账号发言动作，得有主人确认/频率约束，走 agent 那条既有通道更稳。
+  async function notifyOwnerByAgent(where) {
+    try {
+      const sid = String(cfg.sessionId || '').trim()
+      const agent = sid ? liveAgentOf(normSid(sid)) : null
+      if (!agent || typeof agent.followup !== 'function') {
+        log('（那个对话没开着，没法叫醒 agent 通知主人；设置页上会有醒目提示）')
+        return
+      }
+      if (!sessionRoute(agent)) return
+      const g = runtime.gate || {}
+      const kindText = g.kind === GATE.VERIFY ? '验证码/二次验证' : (g.kind === GATE.LOGIN ? '登录态失效' : '页面状态异常')
+      agent.followup(makeUserMessage(
+        `【需要主人本人处理】抖音那边被拦了：${kindText}。来源：${where || '未知'}。证据：${g.reason || '无'}。\n`
+        + '插件已经停手，不会再自动重试。\n'
+        + '请用 douyin_send 给主人发一条短消息（≤15 字，像聊天那样，别贴日志），告诉他：'
+        + (g.kind === GATE.LOGIN
+          ? '「登录态失效了，去设置页 → 维护 → 切有头 + 触发验证，重新登录一次」'
+          : '「需要你过一下验证码：设置页 → 维护 → 切有头 + 触发验证」')
+        + '。发完就停，不要自己去点滑块、不要反复重试。',
+      ))
+      log('已叫醒 agent 去通知主人（它负责发那条私信）')
+    } catch (e) { log('叫醒 agent 通知主人失败：' + ((e && e.message) || e)) }
+  }
+
+  /** 挡住期间：每 3 分钟只读探一次页面，恢复正常就自动解除（主人手动点也行） */
+  async function probeGateIfDue() {
+    const g = runtime.gate
+    if (!g || !g.kind || g.kind === GATE.OK) return false
+    if (!NEEDS_OWNER.has(g.kind)) return false          // 冷却类等时间就行，不用探
+    const now = Date.now()
+    if (now - Number(g.lastProbeAt || 0) < gateProbeGapMs) return false
+    g.lastProbeAt = now
+    try {
+      const r = await runNode(cfg.pageStateScript, [], 60000)
+      const p = (r && r.parsed) || {}
+      g.lastProbe = { at: now, state: p.state || 'unknown', evidence: p.evidence || '', page: p.page || null }
+      if (p.state === GATE.OK) { clearGate('探针发现页面已恢复正常'); return true }
+      return false
+    } catch (e) {
+      g.lastProbe = { at: now, state: 'unknown', evidence: String((e && e.message) || e) }
+      return false
+    }
+  }
+
+  // ── 本机记录的「我自己是谁」（self.json）────────────────────────────────
+  //   只存这个账号自己的 uid + 昵称，用途只有一个：详情接口拿不到时判断"这条评论是不是我发的"。
+  //   ⚠️ 和 owner.json 是两件事、两个文件：owner = 能命令我的人；self = 这个抖音账号本身。
+  const selfFile = () => join(cfg.home || HOME, 'self.json')
+  function readSelfStore() {
+    try { return normalizeStore(JSON.parse(readFileSync(selfFile(), 'utf8'))) } catch { return normalizeStore(null) }
+  }
+  function writeSelfStore(store) {
+    try { writeFileSync(selfFile(), JSON.stringify(normalizeStore(store), null, 2)); return true } catch (e) {
+      log('写 self.json 失败：' + ((e && e.message) || e)); return false
+    }
+  }
+  function clearSelfStore() {
+    try { if (existsSync(selfFile())) rmSync(selfFile(), { force: true }); return true } catch { return false }
+  }
+
+  // ── 定时体检（默认 6 小时，可配置，也能关）────────────────────────────
+  //   一次体检 = 跑一次 tools/comment-probe.mjs（它内部打 3 个请求做对照，这是设计，不是"连打"）。
+  //   只在**状态变化**时提醒；失败只提示，不拦主流程（主流程该不该停由闸门管）。
+  function healthHours() {
+    const raw = cfg.probeHours
+    if (raw === 0 || raw === '0') return 0                 // 显式关掉
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n <= 0) return 6            // 没配 → 默认 6 小时
+    return Math.max(1, Math.min(72, Math.round(n)))        // 可配范围 1–72 小时
+  }
+  async function maybeHealthCheck() {
+    const hours = healthHours()
+    if (!hours) return
+    const now = Date.now()
+    const last = Number(runtime.healthAt || 0)
+    if (last && now - last < hours * 3600e3) return
+    runtime.healthAt = now                                 // 先占位，失败也算一轮，别每轮重打
+    try {
+      const r = await runNode(join(HERE, 'tools', 'comment-probe.mjs'), [], 120000)
+      const p = (r && r.parsed) || {}
+      const state = String(p.state || PROBE.UNKNOWN)
+      const prev = runtime.healthState ? String(runtime.healthState.state || '') : ''
+      runtime.healthState = { state, at: now, text: String(p.text || ''), evidence: String(p.evidence || '') }
+      // 只在变化时说话（正常→异常、异常→正常），同一类异常不反复吵
+      if (prev !== state && state !== PROBE.OK) {
+        log('评论区接口体检：' + (p.text || state) + (p.evidence ? '（' + p.evidence + '）' : ''))
+      } else if (prev && prev !== state && state === PROBE.OK) {
+        log('评论区接口体检：恢复正常了')
+      }
+    } catch (e) {
+      runtime.healthState = { state: PROBE.UNKNOWN, at: now, text: '体检没跑成', evidence: String((e && e.message) || e) }
+    }
   }
 
   function liveAgentOf(sid) {
@@ -816,6 +1023,13 @@ export function apply(ctx, config) {
     const doOthers = !!cfg.commentAutoReplyOthers
     if (!doWork && !doOthers) return
     const everyMs = Math.max(5, Number(cfg.commentScanMinutes) || 10) * 60e3
+    // 2026-11-13：被拦住了就别再撞。verify/login 只等主人（外加每 3 分钟一次只读探针），
+    //   rate/unknown 等冷却到点。
+    if (!gateAllows(runtime.gate)) {
+      if (!NEEDS_OWNER.has((runtime.gate || {}).kind)) return
+      await probeGateIfDue()
+      if (!gateAllows(runtime.gate)) return
+    }
     if (Date.now() - Number(runtime.lastCommentScanAt || 0) < everyMs) return
     runtime.lastCommentScanAt = Date.now()
     try {
@@ -843,32 +1057,60 @@ export function apply(ctx, config) {
       let workSelfNick = ''            // 自己作品的作者昵称（= 本账号），用来排掉"我自己发的评论"
       const unreachable = new Set()    // 发了但服务端看不见的线程（机器人/平台提示类评论）
       const workIds = known.slice(0, 3) // 一次最多看 3 个作品，别把页面读爆
+      // 本轮新记住几个作品 = 块后的 known.length 减这个数（2026-11-13，issue #2）
+      const knownBeforeWork = known.length
       if (doWork && workIds.length) {
         const perWork = Math.max(10, (Number(cfg.commentMaxPerRound) || 3) * 4)
         // 作品发布超过 N 天的整条跳过（0 = 不限）：别去翻几个月前的旧账
         const workAgeArgs = ['--max-work-age-days', String(Number(cfg.commentWorkMaxAgeDays) || 0)]
         const wr = await runNode(cfg.workCommentsScript, ['--aweme', workIds.join(','), '--max', String(perWork), ...workAgeArgs], 180000)
-        // 页面被验证码拦住时：**如实说是验证码**，别当成"没有待回评论"
-        //   （2026-10-25：抖音弹验证码后页面根本没加载，读半天没结果，看起来像脚本卡死）
-        if (wr.parsed && wr.parsed.code === 'verify_required') {
-          runtime.lastError = '评论区扫描被验证码拦住：' + (wr.parsed.error || '需要人工过滑块')
-          log('⚠️ 评论区扫描跳过：页面被验证码拦住（去有头窗口过一下滑块，设置页 → 维护 →「切有头 + 触发验证」）')
+        // 被拦住时：走闸门，别当成"没有待回评论"、也别下一轮再来撞一次
+        //   （2026-10-25 教训：页面没加载却读半天没结果，看着像脚本卡死；更早还误报过一次验证码）
+        if (wr.parsed && wr.parsed.state && wr.parsed.state !== GATE.OK) {
+          enterGate({
+            kind: wr.parsed.state,
+            evidence: wr.parsed.evidence || wr.parsed.error || '',
+          }, '评论区扫描')
           return
         }
         const works = Array.isArray((wr.parsed || {}).works) ? wr.parsed.works : []
         const author = (wr.parsed && wr.parsed.author) || {}
         if (author.nick) workSelfNick = String(author.nick)
+        // 2026-11-13（自查）：拿不到本账号 uid/昵称时，"这条是不是我发的"判不出来 ——
+        //   以前这种"分不清"被当成"不是我"，于是可能去回自己发的评论（自己回自己）。
+        //   现在交给 classifyCommentSelf 三分类，分不清的直接跳过并在日志里说明。
+        // 2026-11-13（真机验出来的）：这里**不能**拿 cfg.owner 当"我自己"。
+        //   owner 是"能命令我的人"，不等于这个抖音账号的昵称 —— 实测两者是不同账号、
+        //   昵称也完全不一样；拿 owner 当自己 = 自己的评论认不出来（自己回自己）。
+        //   宁可"分不清就跳过"，也不假装认得。
+        // 2026-11-13：详情接口给不出 uid/昵称时，用**本机记录的自己**兜底（self.json）。
+        //   六条规矩见 lib/self-identity.mjs；这里只管"学到就覆盖更新、对不上就作废"。
+        //   ⚠️ 绝不能拿 cfg.owner（主人的号）顶：两个号不是一个人（主人当面纠正过）。
+        let selfUid = ''
+        try {
+          const cachedSelf = readSelfStore()
+          const idv = resolveSelfIdentity({ learned: { uid: author.uid, nick: author.nick }, store: cachedSelf })
+          if (idv.invalidated) log('本机账号记录作废（' + idv.why + '），等下次学到再记')
+          selfUid = String(idv.uid || '').trim()
+          if (idv.nick) workSelfNick = workSelfNick || String(idv.nick)
+          const merged = mergeLearned({ learned: { uid: author.uid, nick: author.nick }, store: cachedSelf, now: new Date().toISOString() })
+          if (merged.changed) {
+            writeSelfStore(merged.store)
+            log('本机账号身份记住了：' + (merged.store.current ? (merged.store.current.nick || merged.store.current.uid) : '') + '（' + merged.reason + '）')
+          }
+        } catch (e) { log('读写本机账号记录失败（不影响扫描）：' + ((e && e.message) || e)) }
+        const selfNick = String(workSelfNick || '').trim()
+        let selfSkipped = 0
+        let selfUnknown = 0
         // 顺手把"我全部作品"记下来：新发一条不用等通知，下一轮就会被扫到
         const discovered = Array.isArray(wr.parsed && wr.parsed.discovered) ? wr.parsed.discovered.map(String) : []
-        let addedWorks = 0
         if (discovered.length) {
           const before = known.length
           const merged = [...new Set([...known, ...discovered])]
           if (merged.length !== before) {
-            addedWorks = merged.length - before
             known = merged
             saveMyWorks(merged)
-            log(`记住我的作品 ${addedWorks} 个（来自作品列表）`)
+            log(`记住我的作品 ${merged.length - before} 个（来自作品列表）`)
           }
         }
         let backfilled = 0
@@ -893,6 +1135,9 @@ export function apply(ctx, config) {
               } catch { /* 补录失败不影响本轮 */ }
             }
             if (it.answered_by_me) continue                 // 我已经回过 → 不是待回
+            // 我发的那条 / 分不清是谁发的 → 都不进候选
+            const selfKind = classifyCommentSelf({ mine: it.mine, nick: it.nick, selfNick, uid: it.uid, selfUid })
+            if (selfKind !== 'ok') { if (selfKind === 'self') selfSkipped++; else selfUnknown++; continue }
             // ⚠️ 台账里发过、服务端却说这条下面没有我的回复 ⇒ 这条线程对公开接口不可见
             //    （典型是平台/机器人账号的提示类评论被折叠）。别再试第二次，试了也是自我安慰。
             if (ledgerHasTarget(it.cid)) { unreachable.add(it.cid); continue }
@@ -905,6 +1150,9 @@ export function apply(ctx, config) {
           for (const rp of (w.replies || [])) {
             if (!rp.cid) continue
             if (ledgerHasTarget(rp.cid)) continue
+            // 子回复同样可能是"我自己发的"（我回别人那句），别把自己那句当待回
+            const selfKind = classifyCommentSelf({ mine: rp.mine, nick: rp.nick, selfNick, uid: rp.uid, selfUid })
+            if (selfKind !== 'ok') { if (selfKind === 'self') selfSkipped++; else selfUnknown++; continue }
             workItems.push({
               type: 31, comment_id: rp.cid, aweme_id: String(w.aweme),
               nickname: rp.nick, content: rp.text, create_time: rp.time,
@@ -913,9 +1161,19 @@ export function apply(ctx, config) {
           }
         }
         if (backfilled) log(`台账补录 ${backfilled} 条（服务端确认我之前回过，来源不是本插件）`)
+        if (selfSkipped) log(`跳过 ${selfSkipped} 条：那是我自己发的（别自己回自己）`)
+        if (selfUnknown) {
+          runtime.lastError = `评论区有 ${selfUnknown} 条分不清是不是我发的（本账号 uid 和昵称都拿不到），已跳过不自动回`
+          log(`⚠️ 跳过 ${selfUnknown} 条：拿不到本账号 uid/昵称，分不清是不是我自己发的 —— 宁可不回，也别自己回自己`)
+        }
         if (tooOld.length) log(`跳过 ${tooOld.length} 个旧作品（超过 ${Number(cfg.commentWorkMaxAgeDays) || 0} 天不再自动回）：${tooOld.join('、')}`)
         if (wr.parsed && wr.parsed.error) log('读作品评论失败：' + wr.parsed.error)
       }
+
+      // 2026-11-13 fix（issue #2）：addedWorks 以前声明在上面这个 if 块里、却在块外读取，
+      //   块没进入时每轮扫描都会抛 ReferenceError，评论自动回从 0.4.2 起一条也发不出去。
+      //   现在放到块外按差值算：块没进 / 没发现新作品时自然是 0。
+      const addedWorks = known.length - knownBeforeWork
 
       // ③ 合并：自己作品下的评论（doWork） + 通知里「别人回复我评论」的那类（doOthers）
       //    （type 35/46 已经由评论列表覆盖了，这里只留 31/45 免得重复）
@@ -1415,6 +1673,11 @@ export function apply(ctx, config) {
 
   let lastReadErr = ''
   async function readMessages(_agent) {
+    // 2026-11-13：被拦住时不要再每轮去撞 —— 只做一次轻量探针，确认恢复了才继续
+    if (!gateAllows(runtime.gate)) {
+      if (NEEDS_OWNER.has((runtime.gate || {}).kind)) await probeGateIfDue()
+      if (!gateAllows(runtime.gate)) return []
+    }
     // --force-chat：哨兵读私信时，页面不在 /chat 就强行导航过去。
     //   不加这个参数时，页面停在首页 / 「验证码中间页」也算 douyin.com，于是永远不导航、
     //   永远读到 0 条、永远静默返回空 —— 和「没有新消息」长得一模一样（2026-10-24 踩过）。
@@ -1433,6 +1696,13 @@ export function apply(ctx, config) {
     // 读到了 messages，但可能「一条也没有，而且有原因」（验证码中间页 / 要登录 / 不在私信页）：
     // 这类原因同样要进日志和设置页，否则设置页永远显示「运行中 + 0 条」，看着像没消息。
     const note = String(r.parsed.note || '').slice(0, 200)
+    // 2026-11-13：脚本会把「页面真实状态」一起报上来（verify/login/rate/unknown），
+    //   这里只负责进闸门 —— 别再把"页面没加载"说成验证码（2026-10-25 误报教训）。
+    const state = String(r.parsed.state || '')
+    if (state && state !== GATE.OK) {
+      enterGate({ kind: state, evidence: String(r.parsed.evidence || note || '') }, '读私信')
+      return Array.isArray(r.parsed.messages) ? r.parsed.messages : []
+    }
     if (note && note !== lastReadErr) {
       lastReadErr = note
       log('读私信受阻：' + note)
@@ -1857,6 +2127,8 @@ export function apply(ctx, config) {
           const p = r.parsed || {}
           const cid = String(p.cid || '')
           const ok = !!(p && p.ok) && !!cid
+          // 2026-11-13：429 是唯一允许"等一会儿"的坏法 —— 进闸门冷却，到点自动继续
+          if (Number(p.http) === 429) enterGate({ kind: GATE.RATE, evidence: '发评论时接口返回 429' }, '发评论')
           // 只有真拿到 cid 才记账（失败不该占额度）
           let quotaNote = ''
           if (ok && cid) {
@@ -2327,6 +2599,8 @@ export function apply(ctx, config) {
         try {
           // 评论区自动回复（可选）：放在最前面，避免私信分支提前 return 时被跳过
           await maybeScanComments(agent)
+          // 2026-11-13：签名自检（默认 6 小时一次）—— 只在状态变化时提醒，失败不拦主流程
+          try { await maybeHealthCheck() } catch { /* 体检怎么都不会拖累哨兵 */ }
           try {
             const list = typeof ctx.agents?.list === 'function' ? ctx.agents.list() : null
             if (Array.isArray(list) && list.length && !list.includes(agent)) {
