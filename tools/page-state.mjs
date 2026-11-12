@@ -6,7 +6,7 @@
  * 输出一行 JSON：{ ok, state, evidence, page:{ href, title, verifyVisible, textlen, boxes } }
  */
 import { openPage } from '../lib/chrome.mjs'
-import { classifyPageState } from '../lib/gate-state.mjs'
+import { classifyPageState, isDouyinUrl } from '../lib/gate-state.mjs'
 
 const JS = `(function(){
   var frs = document.querySelectorAll('iframe[src*="verifycenter"], iframe[src*="/captcha"], [class*="captcha"]');
@@ -27,29 +27,50 @@ const JS = `(function(){
   });
 })()`
 
+/**
+ * 2026-11-13（Codex 审查 P2）：**先确认这是抖音页，再谈"恢复没有"**
+ *   `connectPage()` 在找不到抖音页时会退到「随便哪个 page」（lib/chrome.mjs:190），
+ *   拿一个无关页面去判定「正常」，会把 verify/login 闸门误解除，下一次又撞上。
+ */
+const write = (o) => process.stdout.write(JSON.stringify(o) + '\n')
+
 try {
   const c = await openPage({})
   let page = {}
   try { page = JSON.parse(String(await c.ev(JS))) || {} } catch { page = {} }
   c.close()
-  const verdict = classifyPageState({
-    title: page.title, href: page.href,
-    verifyVisible: page.verifyVisible,
-    bodyText: page.bodyText,
-    messageCount: page.boxes,
-  })
-  process.stdout.write(JSON.stringify({
-    ok: verdict.kind === 'ok',
-    state: verdict.kind,
-    evidence: verdict.evidence,
-    page: {
-      href: String(page.href || '').slice(0, 120),
-      title: String(page.title || '').slice(0, 40),
-      verifyVisible: !!page.verifyVisible,
-      textlen: String(page.bodyText || '').length,
-      boxes: Number(page.boxes) || 0,
-    },
-  }) + '\n')
+
+  const href = String(page.href || '')
+  const pageInfo = {
+    href: href.slice(0, 120),
+    title: String(page.title || '').slice(0, 40),
+    verifyVisible: !!page.verifyVisible,
+    textlen: String(page.bodyText || '').length,
+    boxes: Number(page.boxes) || 0,
+  }
+
+  if (!isDouyinUrl(href)) {
+    // 不是抖音页 ⇒ 说不出任何关于抖音状态的结论。宁可报 unknown（闸门不动），也别给"恢复正常"。
+    write({
+      ok: false,
+      state: 'unknown',
+      evidence: '当前页不是抖音（' + (href ? href.slice(0, 80) : '地址是空的') + '）⇒ 不能拿它判断恢复没有',
+      page: pageInfo,
+    })
+  } else {
+    const verdict = classifyPageState({
+      title: page.title, href,
+      verifyVisible: page.verifyVisible,
+      bodyText: page.bodyText,
+      messageCount: page.boxes,
+    })
+    write({
+      ok: verdict.kind === 'ok',
+      state: verdict.kind,
+      evidence: verdict.evidence,
+      page: pageInfo,
+    })
+  }
 } catch (e) {
-  process.stdout.write(JSON.stringify({ ok: false, state: 'unknown', evidence: '探页面失败：' + String((e && e.message) || e) }) + '\n')
+  write({ ok: false, state: 'unknown', evidence: '探页面失败：' + String((e && e.message) || e) })
 }

@@ -55,3 +55,12 @@ test('详情接口只给昵称、不给 uid 时也要把 author 交出去', () =
     'author 只在有 uid 时才赋值 → 只给昵称的详情响应会让 self.json 兜底学不到东西',
   )
 })
+
+// ── 2026-11-13（Codex 审查 P2）：扫描时的 429 必须能进冷却 ──────────────────────
+test('页面脚本保留 HTTP 429，并把它报成 rate 状态', () => {
+  const render = new Function('COMMON', 'ids', 'max', 'discover', 'maxWorkAgeDays',
+    'return `' + BODY + '`;')
+  const code = render({ aid: '6383' }, ['1'], 20, true, 0)
+  assert.match(code, /if \(r\.status === 429\) http429 = true/, '拿不到 HTTP 状态，429 就会和"普通读失败"长一样')
+  assert.match(code, /res\.state = 'rate'/, '算了 429 却没报给调用方，闸门照样进不去冷却')
+})

@@ -54,9 +54,13 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
   var POOL = 4;
   function qs(d){ return Object.keys(d).map(function(k){return encodeURIComponent(k)+'='+encodeURIComponent(d[k]);}).join('&'); }
   function wait(ms){ return new Promise(function(r){ setTimeout(r, ms) }) }
+  // 2026-11-13（Codex 审查 P2）：**别把 HTTP 状态丢掉**
+  //   以前 429 跟"普通读失败"长一样，调用方进不了冷却，下一次扫描照样撞上去。
+  var http429 = false;
   async function jget(path){
     try {
       var r = await fetch(path, { credentials:'include', headers:{ Referer:'https://www.douyin.com/' } });
+      if (r.status === 429) http429 = true;
       var t = await r.text();
       try { return JSON.parse(t) } catch(e) { return { __head: t.slice(0,100) } }
     } catch(e) { return { __err: String(e && e.message || e) } }
@@ -271,6 +275,8 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
     await wait(300);
   }
   res.ok = true;
+  // 读到限流就如实报给调用方（走闸门冷却），别让它被当成"这轮没有待回评论"
+  if (http429) { res.state = 'rate'; res.evidence = '读评论接口返回 429（限流）'; }
   return JSON.stringify(res);
 })()`
 

@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { classifyPageState, decideGate, gateAllows, gateText, GATE } from '../lib/gate-state.mjs'
+import { classifyPageState, decideGate, gateAllows, gateExpired, gateText, isDouyinUrl, GATE } from '../lib/gate-state.mjs'
 
 const NORMAL = {
   title: '迷迁 - 抖音', href: 'https://www.douyin.com/chat',
@@ -102,4 +102,32 @@ test('提示话术分得清三种坏法（主人知道该去哪）', () => {
   assert.match(gateText({ kind: GATE.LOGIN }), /重新登录/)
   assert.match(gateText({ kind: GATE.RATE }), /限流/)
   assert.match(gateText({ kind: GATE.UNKNOWN }), /没看懂|页面状态/)
+})
+
+// ── 2026-11-13（Codex 审查 P2）：冷却到点要能把闸门**真摘掉** ──────────────────
+test('冷却到期 → gateExpired=true（状态该清了，不然界面一直显示暂停）', () => {
+  const now = 1_000_000
+  assert.equal(gateExpired({ kind: GATE.RATE, retryAt: now + 600e3, needsOwner: false }, now + 300e3), false)
+  assert.equal(gateExpired({ kind: GATE.RATE, retryAt: now + 600e3, needsOwner: false }, now + 601e3), true)
+  assert.equal(gateExpired({ kind: GATE.UNKNOWN, retryAt: now + 120e3, needsOwner: false }, now + 121e3), true)
+})
+
+test('需要主人的闸门永不过期（只能主人点或探针确认）', () => {
+  for (const kind of [GATE.VERIFY, GATE.LOGIN]) {
+    assert.equal(gateExpired({ kind, retryAt: null, needsOwner: true }, Date.now() + 31536e6), false)
+    // needsOwner 字段丢了也不能被当成"可自动清"
+    assert.equal(gateExpired({ kind, retryAt: Date.now() - 1 }, Date.now() + 31536e6), false)
+  }
+  assert.equal(gateExpired(null), false)
+  assert.equal(gateExpired({ kind: GATE.OK }), false)
+})
+
+// ── 2026-11-13（Codex 审查 P2）：探针只认抖音页 ────────────────────────────────
+test('isDouyinUrl：只认抖音域名，别的页一律不算', () => {
+  for (const u of ['https://www.douyin.com/chat', 'http://douyin.com', 'https://live.douyin.com/123']) {
+    assert.equal(isDouyinUrl(u), true, u)
+  }
+  for (const u of ['about:blank', '', 'https://douyin.com.evil.example/x', 'https://example.com/?r=douyin.com', 'https://notdouyin.com/']) {
+    assert.equal(isDouyinUrl(u), false, u)
+  }
 })

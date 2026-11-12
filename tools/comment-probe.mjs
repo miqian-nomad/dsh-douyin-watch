@@ -59,6 +59,28 @@ function pickAweme() {
 }
 
 const aweme = pickAweme()
+
+// 2026-11-13（Codex 审查 P2）：**先看签名器在不在**（重点：这是「没装」，不是「接口坏了」）
+//   以前不管在不在都 spawnSync 三次，全失败后报 unknown —— 打包安装的用户会以为接口出问题。
+//   仓库里不带签名器（那是别人写的第三方实现），所以只认这两个开关或默认位置上真有的文件。
+const probeReady = () => {
+  if (!existsSync(SCRIPT)) return '找不到签名器脚本：' + SCRIPT
+  if (PY && /[\\/]/.test(PY) && !existsSync(PY)) return '找不到 Python：' + PY
+  return ''
+}
+const notReady = probeReady()
+if (notReady) {
+  out({
+    ok: false,
+    state: PROBE.NOT_INSTALLED,
+    text: probeText(PROBE.NOT_INSTALLED),
+    evidence: notReady + '（用 DOUYIN_PROBE_SCRIPT / DOUYIN_SIGN_PY 指到装好的位置；没装就忽略这条体检）',
+    aweme,
+    probes: null,
+  })
+  process.exit(0)
+}
+
 if (!aweme) {
   out({ ok: false, state: PROBE.UNKNOWN, text: '没有可用的视频 id：先用 --aweme 指定一条，或在设置页填「我的作品」', evidence: '拿不到固定视频', probes: null })
   process.exit(0)

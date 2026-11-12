@@ -65,7 +65,7 @@ import { homedir } from 'node:os'
 import { checkPublicComment, recordPublicComment, guardStats, repliedTargets, ledgerHasTarget, setGuardHome, guardFile } from './lib/outbound-guard.mjs'
 import { pickReplyTargets, buildCommentPrompt } from './lib/notice-queue.mjs'
 import { classifyCommentSelf } from './lib/comment-self.mjs'
-import { classifyPageState, decideGate, gateAllows, gateText, GATE, NEEDS_OWNER } from './lib/gate-state.mjs'
+import { classifyPageState, decideGate, gateAllows, gateExpired, gateText, GATE, NEEDS_OWNER } from './lib/gate-state.mjs'
 import { resolveSelfIdentity, mergeLearned, normalizeStore } from './lib/self-identity.mjs'
 import { classifyCommentProbe, probeText as probeTextOf, PROBE } from './lib/comment-probe.mjs'
 import { PERSONA_PRESETS, personaById } from './lib/personas.mjs'
@@ -731,7 +731,7 @@ export function apply(ctx, config) {
               writeFileSync(cfg.cfgFile, JSON.stringify(disk, null, 2))
             } catch { /* 写不了不影响认领 */ }
           }
-          log('已认领主人：' + ((rec && rec.nick) || '(无昵称)') + ' —— 等他发一条消息过来验证')
+          log('已认领主人：' + ((rec && rec.nick) || '(无昵称)') + ' —— 认领即生效（不用等他发消息）')
           return sendJson(200, { ok: true, claim: rec, config: await view() })
         }
         if (req.method === 'POST' && pathname === '/api/douyin-watch/config') {
@@ -878,6 +878,19 @@ export function apply(ctx, config) {
     runtime.gate = null
     if (runtime.lastError === gateText(prev)) runtime.lastError = ''
     log('✅ 闸门解除（' + (why || '页面恢复') + '），继续干活')
+  }
+
+  /**
+   * 2026-11-13（Codex 审查 P2）：冷却类闸门到期就**真的摘掉**。
+   *   以前 `gateAllows()` 到点返回 true、活照干，但 `runtime.gate` 一直挂着，
+   *   设置页的黄色「已暂停」和 doctor 会一直说被挡（明明早就在干活了）。
+   *   需要主人处理的（verify/login）不归它管，只能等主人点或探针确认。
+   */
+  function expireGate() {
+    const g = runtime.gate
+    if (!gateExpired(g)) return false
+    clearGate('冷却时间到了，自动继续')
+    return true
   }
 
   // 让 agent 在它自己的会话里说一句（它能用 douyin_send 私信主人）。
@@ -2588,6 +2601,8 @@ export function apply(ctx, config) {
       stateOf.set(agent, { known: savedKnown || new Set(), ready: Boolean(savedKnown) })
       if (savedKnown) log(`接续上次已知 ${savedKnown.size} 条消息（停机期间的新消息会唤醒）`)
       let busy = false
+      // 2026-11-13（Codex 审查 P2）：体检改后台跑 → 同一时间只许跑一份，别叠起来
+      let healthRunning = false
 
       const timer = setInterval(async () => {
         if (!cfg.enabled) return // 设置里关掉 → 立刻静默（真正的停靠 stopAll，这行是兜底）
@@ -2599,9 +2614,15 @@ export function apply(ctx, config) {
         busy = true
         try {
           // 评论区自动回复（可选）：放在最前面，避免私信分支提前 return 时被跳过
+          expireGate()                                    // 冷却到点的闸门先摘掉，别让状态一直显示"停着"
           await maybeScanComments(agent)
-          // 2026-11-13：签名自检（默认 6 小时一次）—— 只在状态变化时提醒，失败不拦主流程
-          try { await maybeHealthCheck() } catch { /* 体检怎么都不会拖累哨兵 */ }
+          // 2026-11-13（Codex 审查 P2）：签名自检是**只读诊断**，不许挡住私信轮询。
+          //   以前这里 await，签名器在打包环境里不可用或慢（3×40s）时，
+          //   私信最多晚 2 分钟才读到，首轮启动也一样。
+          if (!healthRunning) {
+            healthRunning = true
+            maybeHealthCheck().catch(() => {}).finally(() => { healthRunning = false })
+          }
           try {
             const list = typeof ctx.agents?.list === 'function' ? ctx.agents.list() : null
             if (Array.isArray(list) && list.length && !list.includes(agent)) {
