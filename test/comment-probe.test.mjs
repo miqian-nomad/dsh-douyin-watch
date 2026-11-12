@@ -5,7 +5,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { classifyCommentProbe, PROBE } from '../lib/comment-probe.mjs'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { classifyCommentProbe, probeText, PROBE } from '../lib/comment-probe.mjs'
+
+const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..')
 
 const COOKIE_OK = { file: true, ttwid: true, session: true }
 const R_ITEMS = { http: 200, status_code: 0, n: 14, ok_json: true, head: '{"status_code":0,"comments":[...' }
@@ -57,4 +63,21 @@ test('三次全空 ⇒ empty_silent（如实说分不清，不冒充验证码/�
 test('登录态有没有，不影响 comment/list 的判定（实测不需要登录）', () => {
   const a = classifyCommentProbe({ signed: R_ITEMS, badSign: R_ITEMS, unsigned: R_EMPTY, cookie: { file: true, ttwid: true, session: false } })
   assert.equal(a.state, PROBE.OK, '去掉 sessionid 也照样能读评论，不能因此报登录失效')
+})
+
+// ── 2026-11-13（Codex 审查 P2）：签名器没装 ≠ 接口坏了 ────────────────────────
+test('没装签名器要说「没装」，不能报 unknown 让人以为接口出问题', () => {
+  assert.equal(PROBE.NOT_INSTALLED, 'probe_not_installed')
+  const t = probeText(PROBE.NOT_INSTALLED)
+  assert.match(t, /没装/)
+  assert.match(t, /不是.*接口坏了/)
+})
+
+test('tools/comment-probe.mjs 在 spawn 之前先检查签名器存在（静态守卫）', () => {
+  const src = readFileSync(join(ROOT, 'tools', 'comment-probe.mjs'), 'utf8')
+  const guard = src.indexOf('const notReady = probeReady()')
+  const firstCall = src.indexOf('const signed = call(')
+  assert.ok(guard > 0, '找不到 probeReady() 的存在性检查（被删了？）')
+  assert.ok(firstCall > guard, '存在性检查必须在第一次真去调签名器之前')
+  assert.match(src, /state: PROBE\.NOT_INSTALLED/)
 })

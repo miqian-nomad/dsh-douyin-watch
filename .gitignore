@@ -9,6 +9,7 @@ douyin_cookie.txt
 # 本机身份 / 运行态（公开仓库不带个人标识）
 peer.json
 owner.json
+self.json
 watch-config.json
 watch-known.json
 watcher.lock

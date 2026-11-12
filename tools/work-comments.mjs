@@ -54,9 +54,13 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
   var POOL = 4;
   function qs(d){ return Object.keys(d).map(function(k){return encodeURIComponent(k)+'='+encodeURIComponent(d[k]);}).join('&'); }
   function wait(ms){ return new Promise(function(r){ setTimeout(r, ms) }) }
+  // 2026-11-13（Codex 审查 P2）：**别把 HTTP 状态丢掉**
+  //   以前 429 跟"普通读失败"长一样，调用方进不了冷却，下一次扫描照样撞上去。
+  var http429 = false;
   async function jget(path){
     try {
       var r = await fetch(path, { credentials:'include', headers:{ Referer:'https://www.douyin.com/' } });
+      if (r.status === 429) http429 = true;
       var t = await r.text();
       try { return JSON.parse(t) } catch(e) { return { __head: t.slice(0,100) } }
     } catch(e) { return { __err: String(e && e.message || e) } }
@@ -69,7 +73,10 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
   var a = (d.aweme_detail || {}).author || {};
   authorUid = String(a.uid || '');
   authorSec = String(a.sec_uid || '');
-  if (authorUid) res.author = { nick: a.nickname || '', uid: authorUid, sec_uid: authorSec };
+  // 2026-11-13（Codex 审查 P2）：**uid 拿不到也要把昵称交出去**
+  //   以前 if (authorUid) 才赋值，详情接口只给昵称时 author 整个是 null，
+  //   调用方（index.js 的 self.json 兜底）什么都学不到 → 昵称过滤照样失效。
+  if (authorUid || String(a.nickname || '').trim()) res.author = { nick: String(a.nickname || ''), uid: authorUid, sec_uid: authorSec };
 
   // ② 顺手列出"我全部作品"（新发一条不用等通知也能被扫到）
   var workTime = {};   // aweme_id -> 发布时间（秒）
@@ -131,7 +138,10 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
         uid: String(u.uid || ''),
         // 2026-11-13：这条是不是我自己发的。uid 拿得到就给 true/false，
         //   拿不到给 null（= 分不清），让调用方别把"分不清"当成"不是我"。
-        mine: authorUid ? (String(u.uid || '') === authorUid) : null,
+        // 2026-11-13（Codex 审查 P2）：**评论自己没带 uid 时必须是 null**
+        //   以前只判 authorUid 在不在，评论的 user.uid 缺失时会算成 false（= 铁证"不是我"），
+        //   classifyCommentSelf 就不再看昵称 → 可能把账号自己的评论排进待回。
+        mine: (authorUid && String(u.uid || '')) ? (String(u.uid || '') === authorUid) : null,
         text: String(c.text || '').replace(/\\s+/g, ' ').slice(0, 160),
         time: Number(c.create_time || 0),
         // 只作参考：抖音经常给 undefined，**不拿它当"要不要探"的依据**
@@ -188,7 +198,10 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
           nick: String(u.nickname || ''),
           uid: String(u.uid || ''),
           // 同上：子回复也可能是"我自己回别人那句"，拿不到 uid 就是 null（分不清）
-          mine: authorUid ? (String(u.uid || '') === authorUid) : null,
+          // 2026-11-13（Codex 审查 P2）：**评论自己没带 uid 时必须是 null**
+          //   以前只判 authorUid 在不在，评论的 user.uid 缺失时会算成 false（= 铁证"不是我"），
+          //   classifyCommentSelf 就不再看昵称 → 可能把账号自己的评论排进待回。
+          mine: (authorUid && String(u.uid || '')) ? (String(u.uid || '') === authorUid) : null,
           text: String(c.text || '').replace(/\\s+/g, ' ').slice(0, 160),
           time: Number(c.create_time || 0),
           root_cid: rootCid,
@@ -262,6 +275,8 @@ const JS = (ids, max, discover, maxWorkAgeDays) => `(async function(){
     await wait(300);
   }
   res.ok = true;
+  // 读到限流就如实报给调用方（走闸门冷却），别让它被当成"这轮没有待回评论"
+  if (http429) { res.state = 'rate'; res.evidence = '读评论接口返回 429（限流）'; }
   return JSON.stringify(res);
 })()`
 

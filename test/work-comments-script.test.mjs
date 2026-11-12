@@ -38,6 +38,29 @@ test('页面内脚本给每条评论带了 mine 字段（自己回自己的防�
   const render = new Function('COMMON', 'ids', 'max', 'discover', 'maxWorkAgeDays',
     'return `' + BODY + '`;')
   const code = render({ aid: '6383' }, ['1'], 20, true, 0)
-  const hits = code.match(/mine:\s*authorUid \?/g) || []
-  assert.ok(hits.length >= 2, '顶层评论和子回复都要按 uid 标出"是不是我发的"，现在只有 ' + hits.length + ' 处')
+  // 2026-11-13（Codex 审查 P2）：必须是「authorUid 有值 **且** 这条评论自己带了 uid」才判 true/false，
+  //   否则给 null（分不清）。老写法 `authorUid ? ... : null` 在评论缺 uid 时算出 false，
+  //   classifyCommentSelf 会当成铁证"不是我"→ 账号自己的评论被排进待回。
+  const hits = code.match(/mine:\s*\(authorUid && String\(u\.uid \|\| ''\)\) \?/g) || []
+  assert.ok(hits.length >= 2, '顶层评论和子回复都要按 uid 标出"是不是我发的"（缺 uid 给 null），现在只有 ' + hits.length + ' 处')
+  const old = code.match(/mine:\s*authorUid \?/g) || []
+  assert.equal(old.length, 0, '还有旧写法（缺 uid 会算成 false）没改干净：' + old.length + ' 处')
+})
+
+test('详情接口只给昵称、不给 uid 时也要把 author 交出去', () => {
+  // 这段不在页面脚本里，直接在源文件上做静态守卫：改回 `if (authorUid)` 当场红。
+  assert.match(
+    SRC,
+    /if \(authorUid \|\| String\(a\.nickname \|\| ''\)\.trim\(\)\) res\.author =/,
+    'author 只在有 uid 时才赋值 → 只给昵称的详情响应会让 self.json 兜底学不到东西',
+  )
+})
+
+// ── 2026-11-13（Codex 审查 P2）：扫描时的 429 必须能进冷却 ──────────────────────
+test('页面脚本保留 HTTP 429，并把它报成 rate 状态', () => {
+  const render = new Function('COMMON', 'ids', 'max', 'discover', 'maxWorkAgeDays',
+    'return `' + BODY + '`;')
+  const code = render({ aid: '6383' }, ['1'], 20, true, 0)
+  assert.match(code, /if \(r\.status === 429\) http429 = true/, '拿不到 HTTP 状态，429 就会和"普通读失败"长一样')
+  assert.match(code, /res\.state = 'rate'/, '算了 429 却没报给调用方，闸门照样进不去冷却')
 })

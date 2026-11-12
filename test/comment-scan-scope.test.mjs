@@ -74,6 +74,7 @@ function harness(over = {}) {
   const logs = []
   const saved = []
   const pickedWith = []
+  const pickedOpts = []
   const gates = []
   const selfWrites = []
   const runtime = { lastCommentScanAt: 0 }
@@ -103,7 +104,7 @@ function harness(over = {}) {
     },
     myWorkIds: () => [...(over.known || [])],
     saveMyWorks: (list) => saved.push([...list]),
-    pickReplyTargets: (items) => { pickedWith.push(items); return { total: items.length, targets: [], skipped: [] } },
+    pickReplyTargets: (items, opts) => { pickedWith.push(items); pickedOpts.push(opts); return { total: items.length, targets: [], skipped: [] } },
     repliedTargets: () => new Set(),
     ledgerHasTarget: () => false,
     recordPublicComment: () => {},
@@ -127,7 +128,7 @@ function harness(over = {}) {
     + 'return (' + FN_SRC + ');',
   )
   const scan = factory(deps)
-  return { scan, cfg, runtime, logs, saved, pickedWith, gates, selfWrites }
+  return { scan, cfg, runtime, logs, saved, pickedWith, pickedOpts, gates, selfWrites }
 }
 
 /** 跑一轮扫描；顺手把"函数自己吞掉异常"这件事也检查了 */
@@ -246,4 +247,46 @@ test('详情给不出身份、本机也没有记录 → 不写文件，按"分�
   await runOnce(h)
   assert.equal(h.selfWrites.length, 0, '没学到就不该写')
   assert.equal(h.runtime.lastCommentScan.items, 0)
+})
+
+// ── 2026-11-13（MOSS 专项）：selfNick 里绝不许混进 cfg.owner ─────────────────
+test('pickReplyTargets 收到的 selfNick 用账号自己的昵称，不含 cfg.owner', async () => {
+  const h = harness({
+    known: ['w1'],
+    cfg: { owner: '主人的号' },
+    workResult: {
+      works: [{ aweme: 'w1', items: [{ cid: 'x1', nick: '路人甲', text: '好看', time: 1, mine: null }] }],
+      discovered: [], author: { nick: '账号自己的号' },
+    },
+  })
+  await runOnce(h)
+  assert.equal(h.pickedOpts.length, 1, '应该走到挑选这一步')
+  assert.equal(h.pickedOpts[0].selfNick, '账号自己的号', 'selfNick 必须是账号自己的昵称')
+  assert.equal(String(h.pickedOpts[0].selfNick).includes('主人的号'), false, '绝不能混进 owner')
+})
+
+test('账号身份拿不到时，selfNick 也必须是空，不能退化成 owner', async () => {
+  const h = harness({
+    known: ['w1'],
+    cfg: { owner: '主人的号' },
+    workResult: {
+      works: [{ aweme: 'w1', items: [{ cid: 'x3', nick: '主人的号', text: '来评论区看看', time: 1, mine: null }] }],
+      discovered: [], author: {},
+    },
+  })
+  await runOnce(h)
+  assert.equal(h.pickedOpts.length, 1)
+  assert.equal(h.pickedOpts[0].selfNick, '', '账号身份为空时必须留空')
+})
+
+test('账号身份未知 + owner 有值：昵称等于 owner 的评论必须进候选（不是"我"）', async () => {
+  const h = harness({
+    known: ['w1'],
+    cfg: { owner: '主人的号' },
+    workResult: { works: [{ aweme: 'w1', items: [{ cid: 'x2', nick: '主人的号', text: '来评论区看看', time: 1, mine: null }] }], discovered: [], author: {} },
+  })
+  await runOnce(h)
+  assert.equal(h.pickedWith.length, 1, '不能被当成"我自己"丢掉')
+  assert.equal(h.pickedWith[0].length, 1)
+  assert.equal(h.pickedWith[0][0].nickname, '主人的号')
 })
