@@ -1055,6 +1055,8 @@ export function apply(ctx, config) {
       //    不再依赖"有没有推通知"。
       let workItems = []
       let workSelfNick = ''            // 自己作品的作者昵称（= 本账号），用来排掉"我自己发的评论"
+      let selfNick = ''               // 2026-11-13：本账号昵称（详情接口 or self.json），块内算、块外用
+      let selfUid = ''                // 本账号 uid（同上）
       const unreachable = new Set()    // 发了但服务端看不见的线程（机器人/平台提示类评论）
       const workIds = known.slice(0, 3) // 一次最多看 3 个作品，别把页面读爆
       // 本轮新记住几个作品 = 块后的 known.length 减这个数（2026-11-13，issue #2）
@@ -1086,7 +1088,6 @@ export function apply(ctx, config) {
         // 2026-11-13：详情接口给不出 uid/昵称时，用**本机记录的自己**兜底（self.json）。
         //   六条规矩见 lib/self-identity.mjs；这里只管"学到就覆盖更新、对不上就作废"。
         //   ⚠️ 绝不能拿 cfg.owner（主人的号）顶：两个号不是一个人（主人当面纠正过）。
-        let selfUid = ''
         try {
           const cachedSelf = readSelfStore()
           const idv = resolveSelfIdentity({ learned: { uid: author.uid, nick: author.nick }, store: cachedSelf })
@@ -1099,7 +1100,7 @@ export function apply(ctx, config) {
             log('本机账号身份记住了：' + (merged.store.current ? (merged.store.current.nick || merged.store.current.uid) : '') + '（' + merged.reason + '）')
           }
         } catch (e) { log('读写本机账号记录失败（不影响扫描）：' + ((e && e.message) || e)) }
-        const selfNick = String(workSelfNick || '').trim()
+        selfNick = String(workSelfNick || '').trim()
         let selfSkipped = 0
         let selfUnknown = 0
         // 顺手把"我全部作品"记下来：新发一条不用等通知，下一轮就会被扫到
@@ -1136,7 +1137,7 @@ export function apply(ctx, config) {
             }
             if (it.answered_by_me) continue                 // 我已经回过 → 不是待回
             // 我发的那条 / 分不清是谁发的 → 都不进候选
-            const selfKind = classifyCommentSelf({ mine: it.mine, nick: it.nick, selfNick, uid: it.uid, selfUid })
+            const selfKind = classifyCommentSelf({ mine: it.mine, nick: it.nick, selfNick, uid: it.uid, selfUid, ownerNick: cfg.owner })
             if (selfKind !== 'ok') { if (selfKind === 'self') selfSkipped++; else selfUnknown++; continue }
             // ⚠️ 台账里发过、服务端却说这条下面没有我的回复 ⇒ 这条线程对公开接口不可见
             //    （典型是平台/机器人账号的提示类评论被折叠）。别再试第二次，试了也是自我安慰。
@@ -1151,7 +1152,7 @@ export function apply(ctx, config) {
             if (!rp.cid) continue
             if (ledgerHasTarget(rp.cid)) continue
             // 子回复同样可能是"我自己发的"（我回别人那句），别把自己那句当待回
-            const selfKind = classifyCommentSelf({ mine: rp.mine, nick: rp.nick, selfNick, uid: rp.uid, selfUid })
+            const selfKind = classifyCommentSelf({ mine: rp.mine, nick: rp.nick, selfNick, uid: rp.uid, selfUid, ownerNick: cfg.owner })
             if (selfKind !== 'ok') { if (selfKind === 'self') selfSkipped++; else selfUnknown++; continue }
             workItems.push({
               type: 31, comment_id: rp.cid, aweme_id: String(w.aweme),
@@ -1186,7 +1187,7 @@ export function apply(ctx, config) {
         replied: new Set([...repliedTargets()].filter((c) => !unreachable.has(c))),
         unreachable,
         // 自己作品下的"我"就是这个账号本身，不是私信对端 —— 否则会把我的评论当成待回
-        selfNick: workSelfNick || String(cfg.owner || '').trim(),
+        selfNick: selfNick,          // 只用"账号自己"的昵称（详情接口 or self.json）；**不用 cfg.owner**
         maxAgeHours: Number(cfg.commentNoticeMaxAgeHours) || 48,
         limit: Number(cfg.commentMaxPerRound) || 3,
         skipNicks: String(cfg.commentSkipNicks || ''),
