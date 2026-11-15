@@ -298,6 +298,11 @@ window.__ModuleLoader__.load({
       const canGo = (n) => (mustDo[n] ? status[n] === 'ok' : true)
       const next = () => { if (step < 6 && canGo(step)) { setStep(step + 1); setWarn('') } }
       const prev = () => { if (step > 1) { setStep(step - 1); setWarn('') } }
+      // 向导页里也要有「重新引导」的入口（常驻、看得见）：清掉本页的检测状态，从第 1 步重来。
+      //   只动界面状态，不写任何文件 —— 已经存好的配置 / self.json 不受影响。
+      const restartWizard = () => {
+        setStep(1); setWarn(''); setStatus({}); setMsg({}); setMe(null); setOwner(null); setChecks(null)
+      }
       const btn = (label, onClick, opts) => h('button', {
         type: 'button', disabled: !!opts?.disabled, onClick,
         style: Object.assign({}, btnBase, {
@@ -417,7 +422,15 @@ window.__ModuleLoader__.load({
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
           h('div', { style: { fontSize: 13.5, fontWeight: 600, color: C.text } },
             step === 7 ? '第 7 / 7 步 · 体检' : ('第 ' + step + ' / 7 步 · ' + steps[step - 1])),
-          h('div', { style: { fontSize: 11.5, color: C.text3 } }, hint)),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+            h('div', { style: { fontSize: 11.5, color: C.text3 } }, hint),
+            h('button', {
+              type: 'button', onClick: restartWizard, disabled: !!busy,
+              style: {
+                fontSize: 11.5, padding: '3px 9px', borderRadius: 999, cursor: busy ? 'default' : 'pointer',
+                border: '1px solid ' + C.line, background: 'transparent', color: C.text3, opacity: busy ? 0.55 : 1,
+              },
+            }, '重新开始'))),
         h('div', { style: { height: 4, borderRadius: 999, background: C.line, overflow: 'hidden', marginBottom: 12 } },
           h('div', { style: { width: pct + '%', height: '100%', background: C.brand, transition: 'width .2s ease' } })),
         h('div', { style: { border: '1px solid ' + C.line, borderRadius: 12, background: C.card, padding: '14px 16px' } }, body),
@@ -833,7 +846,55 @@ window.__ModuleLoader__.load({
         return h(Wizard, { cfg, setCfg, onDone: () => { setWizOpen(false); load(); } });
       }
 
+      // 2026-11-15（主人要求）：顶部常驻「重新引导」入口 + 「身份不自洽」提示。
+      //   来由：主人想重进向导找不到入口，误点了「清除本机记录」把 self.json 删了。
+      //   ① onboarded=true 但 self 三项（uid/昵称/sec_uid）不全 → 顶一条明确提示 + 按钮；
+      //   ② 状态正常 → 顶一条轻量的常驻入口（不是藏在角落的小灰字）。
+      //   判定数据来自后端 view().self.complete（读 $HOME/self.json 的 current.uid/nick/sec_uid），
+      //   所以补完以后 load() 一刷就消失，不是页面打开时算一次就定死。
+      const wizardEntry = () => {
+        const me = (cfg && cfg.self) || {}
+        const gap = cfg && cfg.onboarded === true && !me.complete
+        const openWiz = () => setWizOpen(true)
+        if (gap) {
+          const miss = Array.isArray(me.missing) ? me.missing : []
+          return h('div', {
+            style: {
+              border: '1px solid #d68910', background: C.card,
+              borderRadius: 12, padding: '12px 16px', margin: '0 0 10px',
+            },
+          },
+            h('div', { style: { fontSize: 13.5, fontWeight: 600, color: '#b9770e' } }, '⚠️ 本号身份缺失'),
+            h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '19px', marginTop: 4 } },
+              '它现在认不出自己的号：判断不了哪条评论是它自己发的，评论可能会漏回。',
+              miss.length ? '（缺 ' + miss.join('、') + '）' : '（本机没有这份记录）'),
+            h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 4 } },
+              '补一次就好：重新引导，第 3 步会重新认本号，大约十几秒。'),
+            h('button', {
+              type: 'button', onClick: openWiz,
+              style: Object.assign({}, btnBase, { marginTop: 8, cursor: 'pointer' }),
+            }, '去重新引导'),
+          )
+        }
+        return h('div', {
+          style: {
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+            border: '1px solid ' + C.line, borderRadius: 12, background: C.card,
+            padding: '9px 14px', margin: '0 0 10px',
+          },
+        },
+          h('div', { style: { fontSize: 12.5, color: C.text2 } },
+            '换号了 / 想补本号身份 / 想重认主人 → 重新走一遍引导'),
+          h('button', {
+            type: 'button', onClick: openWiz,
+            style: Object.assign({}, btnBase, { cursor: 'pointer', flex: '0 0 auto' }),
+          }, '重新引导'),
+        )
+      }
+
       return h('div', { 'data-dy-panel': '1', style: { padding: '4px 0 16px' } },
+
+        wizardEntry(),
 
         h('div', {
           style: {
@@ -852,13 +913,6 @@ window.__ModuleLoader__.load({
               border: '1px solid ' + C.line, background: 'transparent', color: C.text2,
             },
           }, s.label)),
-          h('button', {
-            type: 'button', onClick: () => { setWizOpen(true) },
-            style: {
-              fontSize: 11.5, padding: '4px 9px', borderRadius: 999, cursor: 'pointer',
-              border: '1px solid ' + C.line, background: 'transparent', color: C.text3, flex: '0 0 auto',
-            },
-          }, '重新引导'),
         ),
 
         h('div', {
@@ -881,12 +935,12 @@ window.__ModuleLoader__.load({
         (() => {
           const me = cfg && cfg.self
           const txt = me && me.stored
-            ? ('已记住：' + (me.nick || '（没学到昵称）') + (me.uid ? '（ID ' + me.uid + '）' : '') + (me.learned_at ? ' · ' + String(me.learned_at).slice(0, 10) : ''))
-            : '还没记住（等下一次评论区扫描自动学；也可以现在清掉让它重学）'
+            ? ('已记住：' + (me.nick || '（没学到昵称）') + (me.uid ? '（ID ' + me.uid + '）' : '') + (me.learned_at ? ' · ' + String(me.learned_at).slice(0, 10) : '') + (me.complete ? '' : '（缺 ' + ((me.missing || []).join('、') || 'sec_uid') + '）'))
+            : '还没记住 —— 点页面顶部「重新引导」，第 3 步会重新认本号'
           return h('div', null,
             h(Row, {
             label: '这个账号自己是谁',
-            hint: '只存你这个抖音号的 uid 和昵称，用来判断"这条评论是不是我发的"。和上面那位主人是两回事',
+            hint: '只存你这个抖音号的 uid、昵称和 sec_uid，用来判断"这条评论是不是我发的"。和上面那位主人是两回事',
           },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               h('span', { style: { fontSize: 12.5, color: C.text2 } }, txt),

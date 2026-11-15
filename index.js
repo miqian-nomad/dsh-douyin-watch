@@ -66,7 +66,7 @@ import { checkPublicComment, recordPublicComment, guardStats, repliedTargets, le
 import { pickReplyTargets, buildCommentPrompt } from './lib/notice-queue.mjs'
 import { classifyCommentSelf } from './lib/comment-self.mjs'
 import { classifyPageState, decideGate, gateAllows, gateExpired, gateText, GATE, NEEDS_OWNER } from './lib/gate-state.mjs'
-import { resolveSelfIdentity, mergeLearned, normalizeStore } from './lib/self-identity.mjs'
+import { resolveSelfIdentity, mergeLearned, normalizeStore, selfStatus } from './lib/self-identity.mjs'
 import { classifyCommentProbe, probeText as probeTextOf, PROBE } from './lib/comment-probe.mjs'
 import { PERSONA_PRESETS, personaById } from './lib/personas.mjs'
 import { listPersonas, resolvePersona, personaText, mutate as mutatePersonas, storePath } from './lib/persona-store.mjs'
@@ -487,7 +487,12 @@ export function apply(ctx, config) {
           o.status.signed = existsSync(signScript)
           o.status.signedDeps = existsSync(join(pyRoot, 'curl_cffi')) && existsSync(join(pyRoot, 'cryptography'))
         } catch { o.status.signed = false; o.status.signedDeps = false }
-        o.commentQuota = guardStats({ perHour: cfg.commentPerHour, perDay: cfg.commentPerDay }); o.commentScan = runtime.lastCommentScan || null; o.self = (() => { try { const st = readSelfStore(); const c = st.current; return c ? { stored: true, uid: c.uid ? (c.uid.slice(0, 6) + '…') : '', nick: c.nick || '', learned_at: c.learned_at || '' } : { stored: false } } catch { return { stored: false } } })(); o.onboarded = cfg.onboarded === true; o.health = runtime.healthState || null; o.probeHours = healthHours(); o.gate = runtime.gate ? { kind: runtime.gate.kind, at: runtime.gate.at, reason: runtime.gate.reason || '', retryAt: Number(runtime.gate.retryAt) || 0, needsOwner: !!runtime.gate.needsOwner, where: runtime.gate.where || '', text: gateText(runtime.gate), lastProbe: runtime.gate.lastProbe || null } : null; return o }
+        o.commentQuota = guardStats({ perHour: cfg.commentPerHour, perDay: cfg.commentPerDay }); o.commentScan = runtime.lastCommentScan || null; o.self = (() => {
+          // 2026-11-15（主人要求）：光有 self.json 不够，要能判断「三项齐不齐」——
+          //   引导第 3 步可以「稍后设置」，那样 onboarded=true 却认不出本号，状态不自洽。
+          //   complete=false 时设置页顶部会顶一条提示 + 「去重新引导」。判据在 lib/self-identity.mjs。
+          try { return selfStatus(readSelfStore()) } catch { return selfStatus(null) }
+        })(); o.onboarded = cfg.onboarded === true; o.health = runtime.healthState || null; o.probeHours = healthHours(); o.gate = runtime.gate ? { kind: runtime.gate.kind, at: runtime.gate.at, reason: runtime.gate.reason || '', retryAt: Number(runtime.gate.retryAt) || 0, needsOwner: !!runtime.gate.needsOwner, where: runtime.gate.where || '', text: gateText(runtime.gate), lastProbe: runtime.gate.lastProbe || null } : null; return o }
         const pathname = (req.url || '').split('?')[0]
         // GET /api/douyin-watch/sessions —— 给设置页的「钉死会话」选择器（只读）
         //   优先问 DSH 自己的会话服务（就是 GUI 会话列表那份数据）；拿不到再扫 ~/.dsh/sessions 目录。
