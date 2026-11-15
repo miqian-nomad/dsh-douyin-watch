@@ -103,3 +103,53 @@ test('页面连名字都没认出来 → ok:false 且 page_ok:false（这时候�
   assert.equal(r.page_ok, false, '页面坏和"页面好但没 ID"要分开，设置页才不会误报')
   assert.match(r.error, /没认出会话身份/)
 })
+// ── 2026-11-15：认领按 sec_uid 挡「本号自己」────────────────────────────────
+const SELF = { uid: '7607266828653659185', nick: '一条黄毛大肥鱼', sec_uid: 'MS4wLjABAAAA_SELF_SEC' }
+
+test('认领对象就是本号自己（sec_uid 相同）→ 拒绝，且不产出 record', () => {
+  const r = resolveOwnerClaim({
+    page: { sec: SELF.sec_uid, title: '一条黄毛大肥鱼' },
+    old: null, peer: null, self: SELF, now: NOW,
+  })
+  assert.equal(r.ok, false)
+  assert.equal(r.self_claim, true)
+  assert.equal(r.record, undefined, '拒绝时不许产出记录（否则就写盘了）')
+  assert.match(r.error, /本号自己/)
+})
+
+test('重名但不同 sec_uid → 正常通过，不带降级标记（昵称不唯一，ID 才唯一）', () => {
+  const r = resolveOwnerClaim({
+    page: { sec: 'MS4wLjABAAAA_OTHER_SEC', title: '一条黄毛大肥鱼' },
+    old: null, peer: null, self: SELF, now: NOW,
+  })
+  assert.equal(r.ok, true)
+  assert.equal(r.record.sec_uid, 'MS4wLjABAAAA_OTHER_SEC')
+  assert.equal(r.sameNickDifferentId, undefined, '能比 ID 时就不该走降级提示')
+})
+
+test('降级：本机没有本号 sec_uid、昵称相同 → 放行但要明确打标记', () => {
+  const r = resolveOwnerClaim({
+    page: { sec: 'MS4wLjABAAAA_OTHER_SEC', title: '一条黄毛大肥鱼' },
+    old: null, peer: null, self: { uid: '760', nick: '一条黄毛大肥鱼', sec_uid: '' }, now: NOW,
+  })
+  assert.equal(r.ok, true, '不许因为昵称相同就拒绝')
+  assert.equal(r.sameNickDifferentId, true)
+  assert.equal(r.id_check, 'unavailable')
+  assert.match(r.note, /没法比对 ID/)
+})
+
+test('降级且昵称不同 → 正常通过，不打扰用户', () => {
+  const r = resolveOwnerClaim({
+    page: { sec: 'MS4wLjABAAAA_OTHER_SEC', title: '迷迁' },
+    old: null, peer: null, self: { uid: '760', nick: '一条黄毛大肥鱼', sec_uid: '' }, now: NOW,
+  })
+  assert.equal(r.ok, true)
+  assert.equal(r.sameNickDifferentId, undefined)
+})
+
+test('待认对象拿不到 sec_uid → 维持原行为：拒绝、不写盘、不许按昵称猜', () => {
+  const r = resolveOwnerClaim({ page: { sec: '', title: '迷迁' }, old: null, peer: null, self: SELF, now: NOW })
+  assert.equal(r.ok, false)
+  assert.equal(r.sec_missing, true)
+  assert.equal(r.record, undefined)
+})

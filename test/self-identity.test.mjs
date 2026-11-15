@@ -14,7 +14,7 @@ const ME = { uid: '7607266828653659185', nick: '一条黄毛大肥鱼' }
 test('第一次学到 → 记成 current，且只存 uid/昵称/时间（不存凭据）', () => {
   const r = mergeLearned({ learned: ME, store: null, now: NOW1 })
   assert.equal(r.changed, true)
-  assert.deepEqual(Object.keys(r.store.current).sort(), ['learned_at', 'nick', 'uid'])
+  assert.deepEqual(Object.keys(r.store.current).sort(), ['learned_at', 'nick', 'sec_uid', 'uid'])  // 2026-11-15 加 sec_uid
   assert.equal(r.store.current.uid, ME.uid)
   assert.equal(r.store.current.nick, ME.nick)
 })
@@ -72,4 +72,27 @@ test('缓存里什么都没有 → none（调用方按"分不清"处理，绝不
   assert.equal(r.source, 'none')
   assert.equal(r.uid, '')
   assert.equal(r.nick, '')
+})
+// ── 2026-11-15：self.json 增加 sec_uid（向后兼容）──────────────────────────
+test('老 self.json 没有 sec_uid 字段 → 读进来照常可用，sec_uid 为空串', () => {
+  const legacy = { current: { uid: '760', nick: '一条黄毛大肥鱼', learned_at: '2026-11-11T00:00:00Z' }, known: [] }
+  const st = normalizeStore(legacy)
+  assert.equal(st.current.uid, '760')
+  assert.equal(st.current.nick, '一条黄毛大肥鱼')
+  assert.equal(st.current.sec_uid, '', '老文件没有这个字段时给空串，不能崩')
+})
+
+test('学到 sec_uid → 写进 current；同 uid 再次学到时补/更新 sec_uid', () => {
+  const a = mergeLearned({ learned: { uid: '760', nick: 'x' }, store: null, now: NOW1 })
+  assert.equal(a.store.current.sec_uid, '')
+  const b = mergeLearned({ learned: { uid: '760', nick: 'x', sec_uid: 'MS4wSEC' }, store: a.store, now: NOW2 })
+  assert.equal(b.store.current.sec_uid, 'MS4wSEC')
+  assert.equal(b.store.current.uid, '760', '原有字段不许变')
+})
+
+test('换号时旧记录的 sec_uid 跟着进历史，不丢', () => {
+  const a = mergeLearned({ learned: { uid: '760', nick: 'x', sec_uid: 'SEC_A' }, store: null, now: NOW1 }).store
+  const b = mergeLearned({ learned: { uid: '999', nick: 'y', sec_uid: 'SEC_B' }, store: a, now: NOW2 }).store
+  assert.equal(b.current.sec_uid, 'SEC_B')
+  assert.equal(b.known[0].sec_uid, 'SEC_A')
 })

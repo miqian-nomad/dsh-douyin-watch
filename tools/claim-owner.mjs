@@ -99,6 +99,8 @@ try {
     page: idn,
     old: readJsonOrNull(join(dir, 'owner.json')),
     peer: readJsonOrNull(join(dir, 'peer.json')),
+    // 2026-11-15：本号自己的身份，用来挡「把本号认成主人」（按 sec_uid 判）
+    self: (readJsonOrNull(join(dir, 'self.json')) || {}).current || null,
     now: new Date().toISOString(),
   })
 
@@ -106,7 +108,9 @@ try {
     out({
       ok: false,
       page_ok: !!verdict.page_ok,
-      sec_missing: true,
+      // 2026-11-15：区分两种拒绝 —— 「这是本号自己」和「拿不到 ID」
+      self_claim: !!verdict.self_claim,
+      sec_missing: !verdict.self_claim,
       nick: verdict.nick || String(idn.title || '').trim(),
       error: verdict.error,
     })
@@ -115,7 +119,11 @@ try {
 
   const rec = verdict.record
   if (!DRY) writeFileSync(join(dir, 'owner.json'), JSON.stringify(rec, null, 2))
-  out({ ok: true, via: verdict.via, ...rec })
+  out({
+    ok: true, via: verdict.via, ...rec,
+    // 降级路径的标记：本机没学到本号 sec_uid 时，昵称相同但没法比 ID
+    ...(verdict.sameNickDifferentId ? { sameNickDifferentId: true, id_check: verdict.id_check, note: verdict.note } : {}),
+  })
 } catch (e) {
   out({ ok: false, page_ok: false, error: String((e && e.message) || e) })
 }

@@ -449,7 +449,8 @@ window.__ModuleLoader__.load({
             setClaimBusy(false);
             if (d && d.ok) {
               setCfg(d.config || cfg);
-              setClaimMsg('');
+              // 2026-11-15：降级放行要明确说出来（同名、不同号，按 ID 放过；或没法比 ID）
+              setClaimMsg(d.sameNickDifferentId ? ('已设为「' + ((d.claim && d.claim.nick) || '对方') + '」' + (d.note ? '：' + d.note : '')) : '');
             } else {
               setClaimMsg('失败：' + ((d && d.error) || '认领没成功'));
             }

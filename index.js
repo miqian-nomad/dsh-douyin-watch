@@ -732,7 +732,11 @@ export function apply(ctx, config) {
             } catch { /* 写不了不影响认领 */ }
           }
           log('已认领主人：' + ((rec && rec.nick) || '(无昵称)') + ' —— 认领即生效（不用等他发消息）')
-          return sendJson(200, { ok: true, claim: rec, config: await view() })
+          return sendJson(200, {
+            ok: true, claim: rec, config: await view(),
+            // 2026-11-15：降级路径（本机没学到本号 sec_uid、但昵称相同）要如实告诉设置页
+            ...(p && p.sameNickDifferentId ? { sameNickDifferentId: true, id_check: p.id_check, note: p.note } : {}),
+          })
         }
         if (req.method === 'POST' && pathname === '/api/douyin-watch/config') {
           let body = {}
@@ -1103,11 +1107,11 @@ export function apply(ctx, config) {
         //   ⚠️ 绝不能拿 cfg.owner（主人的号）顶：两个号不是一个人（主人当面纠正过）。
         try {
           const cachedSelf = readSelfStore()
-          const idv = resolveSelfIdentity({ learned: { uid: author.uid, nick: author.nick }, store: cachedSelf })
+          const idv = resolveSelfIdentity({ learned: { uid: author.uid, nick: author.nick, sec_uid: author.sec_uid }, store: cachedSelf })
           if (idv.invalidated) log('本机账号记录作废（' + idv.why + '），等下次学到再记')
           selfUid = String(idv.uid || '').trim()
           if (idv.nick) workSelfNick = workSelfNick || String(idv.nick)
-          const merged = mergeLearned({ learned: { uid: author.uid, nick: author.nick }, store: cachedSelf, now: new Date().toISOString() })
+          const merged = mergeLearned({ learned: { uid: author.uid, nick: author.nick, sec_uid: author.sec_uid }, store: cachedSelf, now: new Date().toISOString() })
           if (merged.changed) {
             writeSelfStore(merged.store)
             log('本机账号身份记住了：' + (merged.store.current ? (merged.store.current.nick || merged.store.current.uid) : '') + '（' + merged.reason + '）')
