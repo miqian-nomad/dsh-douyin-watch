@@ -12,6 +12,12 @@
  *   node tools/browser-mode.mjs --mode headed      # 弹窗给你过验证
  *   node tools/browser-mode.mjs --mode headless    # 收回去，平时跑的样子
  *   node tools/browser-mode.mjs --status           # 只报当前模式，不动浏览器
+ *   node tools/browser-mode.mjs --mode headed --port 9361   # 指定端口（验证/测试场景必须这样用）
+ *
+ * ⚠️ --port / IM_CDP_PORT：**临时家目录做验证时必须指定一个自己的端口**。
+ *   2026-11-15 踩过：不指定端口时 lib/chrome.mjs 会扫 9334–9373「有 CDP 就复用」，
+ *   结果复用了主人正在用的真实例。现在 pickPort 会先比对 profile（不一致不复用），
+ *   但验证场景还是应该显式占一个端口，谁都别碰。
  *
  * 输出一行 JSON：{ ok, mode, port, mode_before }
  */
@@ -22,6 +28,10 @@ import { join } from 'node:path'
 
 const argv = process.argv.slice(2)
 const argOf = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? (argv[i + 1] ?? d) : d }
+
+// 指定端口（等价于 IM_CDP_PORT，但要赶在任何 pickPort 之前设好）
+const PORT_ARG = String(argOf('--port', '')).trim()
+if (PORT_ARG) process.env.IM_CDP_PORT = PORT_ARG
 
 // 2026-11-15（主人要求）：新装 / 还没走完引导时，**不要一打开就落在私信页**。
 //   老用户（watch-config.json 里 onboarded:true）行为不变，仍旧直接开 /chat。
