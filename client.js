@@ -545,6 +545,9 @@ window.__ModuleLoader__.load({
       // 2026-11-13：清除本机记录的「这个账号自己是谁」
       const [selfBusy, setSelfBusy] = useState(false);
       const [selfMsg, setSelfMsg] = useState('');
+      // 2026-11-15：主人误点「清除本机记录」删过 self.json → 加二次确认 + 清完给「去重新引导」
+      const [selfConfirm, setSelfConfirm] = useState(false);
+      const [selfCleared, setSelfCleared] = useState(false);
       // 2026-11-07：检查一下（对齐 dsh-mobile 的一键诊断）+ 高级折叠
       const [checkBusy, setCheckBusy] = useState(false);
       const [checks, setChecks] = useState(null);
@@ -736,7 +739,8 @@ window.__ModuleLoader__.load({
           .then((d) => {
             setSelfBusy(false);
             setCfg((d && d.config) || cfg);
-            setSelfMsg(d && d.ok ? '已清除，下次扫到评论会重新学' : '清除失败');
+            setSelfMsg(d && d.ok ? '已清除。' : '清除失败');
+            if (d && d.ok) setSelfCleared(true);
           })
           .catch(() => { setSelfBusy(false); setSelfMsg('失败：接口没回应'); });
       };
@@ -877,11 +881,41 @@ window.__ModuleLoader__.load({
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               h('span', { style: { fontSize: 12.5, color: C.text2 } }, txt),
               h('button', {
-                type: 'button', disabled: selfBusy, onClick: clearSelf,
+                type: 'button', disabled: selfBusy, onClick: () => setSelfConfirm(true),
                 style: Object.assign({}, btnBase, { cursor: selfBusy ? 'default' : 'pointer' }),
               }, selfBusy ? '清除中…' : '清除本机记录'),
             ),
             ),
+            // 二次确认：写清清的是什么、后果是什么（主人已经误删过一次）
+            selfConfirm ? h('div', {
+              style: { margin: '6px 0 10px', padding: '10px 12px', border: '1px solid #c0392b', borderRadius: 10, background: C.page },
+            },
+              h('div', { style: { fontSize: 12.5, fontWeight: 600, color: '#c0392b' } }, '要清掉的是「这个抖音号是谁」这条记录'),
+              h('div', { style: { fontSize: 12, color: C.text2, lineHeight: '19px', marginTop: 4 } },
+                '清掉以后它就认不出自己的号了：判断不了哪条评论是你自己发的，评论可能会漏回；认领主人时也只能按昵称比，容易认错。',
+                '抖音上的号本身不受影响，也不会退出登录。'),
+              h('div', { style: { marginTop: 8 } },
+                h('button', {
+                  type: 'button', disabled: selfBusy, onClick: () => { setSelfConfirm(false); clearSelf(); },
+                  style: Object.assign({}, btnBase, { background: '#c0392b', color: '#fff', border: '1px solid #c0392b', cursor: selfBusy ? 'default' : 'pointer', marginRight: 8 }),
+                }, selfBusy ? '清除中…' : '确认清除'),
+                h('button', { type: 'button', onClick: () => setSelfConfirm(false), style: Object.assign({}, btnBase, { cursor: 'pointer' }) }, '取消'),
+              ),
+            ) : null,
+            // 清完之后：直接给一条补回来的路（重新引导 → 第 3 步会重新认本号）
+            selfCleared ? h('div', { style: { margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: 8 } },
+              h('span', { style: { fontSize: 12, color: C.text3 } }, '要补回来就重新引导一次（第 3 步会重新认本号）：'),
+              h('button', {
+                type: 'button',
+                onClick: () => {
+                  fetch('/api/douyin-watch/onboard/reset', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+                    .then((r) => r.json())
+                    .then((d) => { setCfg((d && d.config) || cfg); setSelfCleared(false); setSelfConfirm(false); setSelfMsg(''); setWizOpen(true); })
+                    .catch(() => setSelfMsg('打开引导失败：接口没回应'));
+                },
+                style: Object.assign({}, btnBase, { cursor: 'pointer' }),
+              }, '去重新引导'),
+            ) : null,
             selfMsg ? h('div', { style: { fontSize: 12, color: C.text2, padding: '0 0 8px' } }, selfMsg) : null,
           )
         })(),

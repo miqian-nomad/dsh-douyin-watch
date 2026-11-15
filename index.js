@@ -104,7 +104,8 @@ export const name = 'douyin-watch'
 export const inject = ['agents', 'tools', 'webServer']
 
 const DEFAULTS = {
-  enabled: true,
+  // 2026-11-15 主人要求：新装默认全部关闭，不要一装上就自己去动号
+  enabled: false,
   chatUrl: 'https://www.douyin.com/chat',
   peer: '', // 要盯的会话昵称（必填，用户配置）
   intervalSeconds: 30,
@@ -153,7 +154,7 @@ const DEFAULTS = {
   commentAutoReply: false,
   // 2026-10-28 按主人要求拆成两类（总开关 commentAutoReply 仍然管全局）：
   //   ①自己作品下的评论（正常互动，默认开）②别人视频下"有人回复了我的评论"（容易被当刷屏，默认关）
-  commentAutoReplyWork: true,
+  commentAutoReplyWork: false,
   commentAutoReplyOthers: false,
   commentScanMinutes: 10,
   commentMaxPerRound: 3,             // 一次最多丢几条给 agent（别一口气 20 条）

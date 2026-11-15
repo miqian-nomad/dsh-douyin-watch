@@ -16,10 +16,24 @@
  * 输出一行 JSON：{ ok, mode, port, mode_before }
  */
 import { ensureChrome, openPage, readBrowserMode, sleep, writeBrowserMode } from '../lib/chrome.mjs'
-import { readRuntime } from '../lib/paths.mjs'
+import { readRuntime, homeDir } from '../lib/paths.mjs'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const argv = process.argv.slice(2)
 const argOf = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? (argv[i + 1] ?? d) : d }
+
+// 2026-11-15（主人要求）：新装 / 还没走完引导时，**不要一打开就落在私信页**。
+//   老用户（watch-config.json 里 onboarded:true）行为不变，仍旧直接开 /chat。
+//   向导第 2 步会显式带 --goto /chat，那是它自己的事。
+function readOnboarded() {
+  try {
+    const f = join(homeDir({ create: false }), 'watch-config.json')
+    const j = JSON.parse(readFileSync(f, 'utf8')) || {}
+    return j.onboarded === true
+  } catch { return false }
+}
+const LANDING = readOnboarded() ? 'https://www.douyin.com/chat' : 'https://www.douyin.com/'
 const STATUS_ONLY = argv.includes('--status')
 const mode = String(argOf('--mode', '')).trim()
 // ⭐ 切到有头之后，顺手把页面开到**会触发滑块的地方**（默认视频页）——
@@ -60,7 +74,7 @@ try {
   const closed = await closeCurrent()
   writeBrowserMode(mode)
   // 按新模式拉起（ensureChrome 会读 browser-mode.json 决定带不带 --headless）
-  const r = await ensureChrome({ url: 'https://www.douyin.com/chat' })
+  const r = await ensureChrome({ url: LANDING })
 
   // 有头 + 指定了 goto：把页面开到那个地址，并检查滑块到底有没有出现
   let probe = null
