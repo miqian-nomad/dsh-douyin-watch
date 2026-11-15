@@ -30,6 +30,60 @@ window.__ModuleLoader__.load({
       page: 'var(--dsw-alias-bg-base, #ffffff)',
     };
 
+    // ── 主题是深还是浅（2026-11-15）──────────────────────────────────────
+    //   为什么要判：提示条以前用写死的浅色底（#fdecea / #fef5e7），深色主题下就是一块刺眼白板；
+    //   语义文字色也全写死（#c0392b / #9c640c …），衬在深色卡片上偏暗。
+    //   判法：直接读 DSH 那个会随主题变的值 --dsw-alias-bg-base，算亮度。
+    //     （不去猜 html 上的 class 名 —— 实测过 --dsw-alias-border-l 那种猜法就失败过。）
+    const isDarkTheme = () => {
+      try {
+        const raw = String(getComputedStyle(document.documentElement).getPropertyValue('--dsw-alias-bg-base') || '').trim();
+        const m = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(raw);
+        if (m) {
+          let hex = m[1];
+          if (hex.length === 3) hex = hex.split('').map((c) => c + c).join('');
+          const r = parseInt(hex.slice(0, 2), 16), g = parseInt(hex.slice(2, 4), 16), b = parseInt(hex.slice(4, 6), 16);
+          return ((0.299 * r + 0.587 * g + 0.114 * b) / 255) < 0.5;
+        }
+        return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      } catch { return false; }
+    };
+
+    /** 跟着主题走的小 hook：DSH 换主题（class / data-theme / style 变了）时重渲染一次 */
+    function useThemeDark() {
+      const [dark, setDark] = React.useState(isDarkTheme);
+      React.useEffect(() => {
+        let obs = null;
+        try {
+          obs = new MutationObserver(() => setDark(isDarkTheme()));
+          obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme', 'style', 'data-color-scheme'] });
+        } catch { obs = null; }
+        const mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+        const onMq = () => setDark(isDarkTheme());
+        if (mq && mq.addEventListener) mq.addEventListener('change', onMq);
+        return () => {
+          try { if (obs) obs.disconnect(); } catch { /* ignore */ }
+          if (mq && mq.removeEventListener) mq.removeEventListener('change', onMq);
+        };
+      }, []);
+      return dark;
+    }
+
+    // 语义色的深浅两套。**浅色那一列逐字等于原来的写死值**（外观一像素不变，可逐值对比）；
+    //   深色那一列是衬在卡片层(--dsw-alias-bg-layer-1 = #232324)上看得清的版本，
+    //   提示条的底色也不再写死浅色，改用卡片层 + 语义色边框。
+    const TONE = (dark) => (dark
+      ? {
+        danger: '#ff8b80', dangerBg: 'var(--dsw-alias-bg-layer-1, #232324)',
+        warn: '#f0b429', warnBg: 'var(--dsw-alias-bg-layer-1, #232324)', warnBorder: '#d68910',
+        ok: '#4ade80', ok2: '#4ade80', note: '#fbbf24', info: '#ff9d6b',
+      }
+      : {
+        danger: '#c0392b', dangerBg: '#fdecea',
+        warn: '#9c640c', warnBg: '#fef5e7', warnBorder: '#d68910',
+        ok: '#1f9d55', ok2: '#2e7d32', note: '#b26a00', info: '#d4380d',
+      });
+
     // ── 原生 <select> 的下拉弹层（issue #4）────────────────────────────────
     // 弹层由浏览器自己绘制：只给 select 设 color 时，深色主题下弹层仍是白底浅字。
     // 实测：本机 Chromium 151 支持 appearance: base-select / ::picker(select)，
@@ -173,15 +227,17 @@ window.__ModuleLoader__.load({
     //   第 1、3 步不能跳过（没登录什么都不能干；没认主人分不清谁的话算命令），其余可稍后。
     const WIZ_STEPS = ['登录抖音号', '确认本号', '认领主人', '谁能命令它', '让它干什么活']
 
-    function WizStatus({ state, text }) {
-      const color = state === 'ok' ? '#1f9d55' : state === 'fail' ? '#c0392b' : C.text3
+    function WizStatus({ state, text, dark }) {
+      const T = TONE(dark)
+      const color = state === 'ok' ? T.ok : state === 'fail' ? T.danger : C.text3
       return h('div', { style: { display: 'flex', gap: 6, alignItems: 'flex-start', fontSize: 12, color, lineHeight: '19px', marginTop: 8 } },
         h('span', { style: { flex: '0 0 auto', fontWeight: 700 } }, state === 'ok' ? '✓' : state === 'fail' ? '✕' : '○'),
         h('span', null, text || (state === 'ok' ? '已通过' : state === 'fail' ? '还没通过' : '还没检测')),
       )
     }
 
-    function Wizard({ cfg, setCfg, onDone }) {
+    function Wizard({ cfg, setCfg, onDone, dark }) {
+      const T = TONE(dark)
       const [step, setStep] = useState(1)
       const [status, setStatus] = useState({})
       const [msg, setMsg] = useState({})
@@ -340,7 +396,7 @@ window.__ModuleLoader__.load({
             btn(busy === 'list' ? '…' : '重新读列表', loadSessions, { disabled: !!busy })))
         }
         body.push(h('div', { style: { marginTop: 10 } }, btn(busy === 'session' ? '保存中…' : '就用这个', saveSession, { disabled: !!busy, primary: true })))
-        body.push(h(WizStatus, { state: status[1], text: msg[1] }))
+        body.push(h(WizStatus, { state: status[1], text: msg[1], dark }))
         body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 6 } },
           (sessions ? '读到 ' + sessions.length + ' 个对话。' : '正在读对话列表…') + '判据：这个对话必须真实存在（列表里找不到就不让过）。'))
       }
@@ -352,7 +408,7 @@ window.__ModuleLoader__.load({
         body.push(h('div', { style: { marginTop: 10 } },
           btn(busy === 'browser' ? '正在打开…' : '打开浏览器去登录', openBrowser, { disabled: !!busy, primary: true }),
           btn(busy === 'login' ? '检测中…' : '我登录好了，检测', checkLogin, { disabled: !!busy })))
-        body.push(h(WizStatus, { state: status[2], text: msg[2] }))
+        body.push(h(WizStatus, { state: status[2], text: msg[2], dark }))
         body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 6 } },
           '判据：能读到一条私信才算真登录（页面标题是当前会话对端昵称，不算；能读评论区也不算——只带 ttwid 就能读）。'))
       }
@@ -366,7 +422,7 @@ window.__ModuleLoader__.load({
             h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 3 } }, 'ID ' + String(me.uid || '').slice(0, 8) + '…' + (me.has_sec ? '（已拿到 sec_uid）' : '（没拿到 sec_uid）'))))
           body.push(h('div', { style: { marginTop: 8 } }, btn('对，就是我', () => setStat(3, 'ok', '已确认：' + (me.nick || '')), { primary: true })))
         }
-        body.push(h(WizStatus, { state: status[3], text: msg[3] }))
+        body.push(h(WizStatus, { state: status[3], text: msg[3], dark }))
         body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 6 } }, '判据：uid / 昵称 / sec_uid 三项齐全（sec_uid 缺了，第 4 步就只能按昵称放行）。'))
       }
       if (step === 4) {
@@ -374,7 +430,7 @@ window.__ModuleLoader__.load({
           '去抖音里点开「你跟主人那条私信会话」（停在会话列表不算），点开之后回来点下面按钮。'))
         body.push(h('div', { style: { marginTop: 10 } }, btn(busy === 'claim' ? '读取中…' : '读取当前会话', claim, { disabled: !!busy, primary: true })))
         if (owner) body.push(h('div', { style: { marginTop: 8, fontSize: 12.5, color: C.text } }, '已认领：', h('b', null, owner.nick || '对方')))
-        body.push(h(WizStatus, { state: status[4], text: msg[4] }))
+        body.push(h(WizStatus, { state: status[4], text: msg[4], dark }))
         body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 6 } },
           '判据：对方的 ID 不能等于第 3 步的本号 ID（本号自己不能当主人）；同名但不同号会放行。'))
       }
@@ -407,11 +463,11 @@ window.__ModuleLoader__.load({
       if (step === 7) {
         const list = Array.isArray(checks) ? checks : []
         const bad = list.filter((c) => !c.ok)
-        body.push(h('div', { style: { fontSize: 13, fontWeight: 600, color: bad.length ? '#c0392b' : '#1f9d55' } },
+        body.push(h('div', { style: { fontSize: 13, fontWeight: 600, color: bad.length ? T.danger : T.ok } },
           bad.length ? ('还有 ' + bad.length + ' 项没过') : '体检全绿，可以开始用了'))
         list.forEach((c) => body.push(h('div', { key: c.key, style: { display: 'flex', justifyContent: 'space-between', gap: 10, padding: '6px 0', borderTop: '1px solid ' + C.line } },
           h('div', null,
-            h('div', { style: { fontSize: 12.5, color: c.ok ? C.text : '#c0392b' } }, (c.ok ? '✓ ' : '✕ ') + c.name),
+            h('div', { style: { fontSize: 12.5, color: c.ok ? C.text : T.danger } }, (c.ok ? '✓ ' : '✕ ') + c.name),
             h('div', { style: { fontSize: 11.5, color: C.text3 } }, c.detail || '')),
           c.ok ? null : btn('去修', () => { setStep(checkStep[c.key] || 2); setWarn('') }))))
       }
@@ -434,7 +490,7 @@ window.__ModuleLoader__.load({
         h('div', { style: { height: 4, borderRadius: 999, background: C.line, overflow: 'hidden', marginBottom: 12 } },
           h('div', { style: { width: pct + '%', height: '100%', background: C.brand, transition: 'width .2s ease' } })),
         h('div', { style: { border: '1px solid ' + C.line, borderRadius: 12, background: C.card, padding: '14px 16px' } }, body),
-        warn ? h('div', { style: { fontSize: 12, color: '#c0392b', marginTop: 8 } }, warn) : null,
+        warn ? h('div', { style: { fontSize: 12, color: T.danger, marginTop: 8 } }, warn) : null,
         h('div', { style: { display: 'flex', justifyContent: 'space-between', marginTop: 12 } },
           h('div', null,
             step > 1 && step <= 6 ? btn('上一步', prev, { disabled: !!busy }) : null,
@@ -503,7 +559,8 @@ window.__ModuleLoader__.load({
     // 运行状态卡片：绿=运行中、灰=已停止、红=有错误。数据每 5 秒刷新一次（宿主 side 拼好）。
     // 2026-10-28 改成「一行状态 + 2×2 指标」：把最该看的四个数摆出来
     //   （今日评论额度 / 最后读取 / 签名直连 / 依赖），别让卡里空着。
-    function StatusCard({ s, q, sessionId }) {
+    function StatusCard({ s, q, sessionId, dark }) {
+      const T = TONE(dark)
       const cell = (k, v, tone) => h('div', {
         style: { padding: '8px 10px', border: '1px solid ' + C.line, borderRadius: 10, background: C.bg2 || 'transparent' },
       },
@@ -517,7 +574,7 @@ window.__ModuleLoader__.load({
       }
       const running = !!s.enabled;
       const bad = !!s.lastError;
-      const color = bad ? '#c0392b' : (running ? '#2e7d32' : 'rgba(120,125,135,0.55)');
+      const color = bad ? T.danger : (running ? T.ok2 : 'rgba(120,125,135,0.55)');
       const quota = q || {};
       const quotaTxt = quota.perHour
         ? (`已回 ${quota.hour || 0} 条 · 每小时最多 ${quota.perHour} · 每天最多 ${quota.perDay}`)
@@ -526,11 +583,11 @@ window.__ModuleLoader__.load({
       const signedTxt = s.signed
         ? (s.signedDeps ? '直接连（快）' : '用浏览器页面（慢一点的备用方式）')
         : '用浏览器页面（正常方式）';
-      const signedTone = s.signed && s.signedDeps ? '#2e7d32' : (s.signed ? '#b26a00' : C.text2);
+      const signedTone = s.signed && s.signedDeps ? T.ok2 : (s.signed ? T.note : C.text2);
       return h(Card, { title: '运行状态' },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0 10px' } },
           h('span', { style: { width: 8, height: 8, borderRadius: 4, background: color, flex: '0 0 auto' } }),
-          h('span', { style: { fontSize: 13, fontWeight: 600, color: bad ? '#c0392b' : C.text } },
+          h('span', { style: { fontSize: 13, fontWeight: 600, color: bad ? T.danger : C.text } },
             bad ? '出错了' : (running ? '正在监听' : '已暂停')),
           h('span', { style: { fontSize: 12, color: C.text3 } },
             running ? (s.peerSet ? '（已选定要监听的抖音聊天）' : '（还没选定抖音聊天，不会工作）') : '（暂停时不看消息）'),
@@ -541,11 +598,13 @@ window.__ModuleLoader__.load({
           cell('最后一次收到私信', s.lastWake || '还没有'),
           cell('回复发到哪个对话', s.sessionLabel || (sessionId ? '（已选，名字暂时没取到）' : '最近在用的那个')),
         ),
-        bad ? h('div', { style: { fontSize: 12, color: '#c0392b', marginTop: 8 } }, '出错原因：' + s.lastError) : null,
+        bad ? h('div', { style: { fontSize: 12, color: T.danger, marginTop: 8 } }, '出错原因：' + s.lastError) : null,
       );
     }
 
     function Panel() {
+      const dark = useThemeDark();
+      const T = TONE(dark);
       const [cfg, setCfg] = useState(null);
       // 2026-11-15：首次引导。onboarded=false 会自动进向导；这个 state 只是给「重新引导」用
       const [wizOpen, setWizOpen] = useState(false);
@@ -671,7 +730,7 @@ window.__ModuleLoader__.load({
               onClick: () => mutatePersonas({ action: 'set-enabled', id: p.id, enabled: p.enabled === false }),
             }, p.enabled === false ? '启用' : '停用'),
             p.builtin ? null : h('button', {
-              type: 'button', style: Object.assign({}, btnBase, { color: '#c0392b' }),
+              type: 'button', style: Object.assign({}, btnBase, { color: T.danger }),
               onClick: () => {
                 if (!window.confirm('删掉「' + p.name + '」？库里的正文会一起没了，找不回来。')) return;
                 mutatePersonas({ action: 'remove', id: p.id });
@@ -769,7 +828,7 @@ window.__ModuleLoader__.load({
       };
 
       // 失败时别再一直显示「加载中…」：把 note 里的错误直接显示出来（2026-10-24：那次 400 就是这么被吞掉的）
-      if (!cfg || !rows) return h('div', { style: { padding: 16, fontSize: 13, color: note ? '#c0392b' : C.text3 } }, note || '加载中…');
+      if (!cfg || !rows) return h('div', { style: { padding: 16, fontSize: 13, color: note ? T.danger : C.text3 } }, note || '加载中…');
 
       const commit = (next) => {
         setRows(next);
@@ -843,7 +902,7 @@ window.__ModuleLoader__.load({
 
       // 首次进来（或点「重新引导」）→ 直接给向导，不进常规设置
       if (cfg && (cfg.onboarded === false || wizOpen)) {
-        return h(Wizard, { cfg, setCfg, onDone: () => { setWizOpen(false); load(); } });
+        return h(Wizard, { cfg, setCfg, dark, onDone: () => { setWizOpen(false); load(); } });
       }
 
       // 2026-11-15（主人要求）：顶部常驻「重新引导」入口 + 「身份不自洽」提示。
@@ -860,11 +919,11 @@ window.__ModuleLoader__.load({
           const miss = Array.isArray(me.missing) ? me.missing : []
           return h('div', {
             style: {
-              border: '1px solid #d68910', background: C.card,
+              border: '1px solid ' + T.warnBorder, background: C.card,
               borderRadius: 12, padding: '12px 16px', margin: '0 0 10px',
             },
           },
-            h('div', { style: { fontSize: 13.5, fontWeight: 600, color: '#b9770e' } }, '⚠️ 本号身份缺失'),
+            h('div', { style: { fontSize: 13.5, fontWeight: 600, color: T.warn } }, '⚠️ 本号身份缺失'),
             h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '19px', marginTop: 4 } },
               '它现在认不出自己的号：判断不了哪条评论是它自己发的，评论可能会漏回。',
               miss.length ? '（缺 ' + miss.join('、') + '）' : '（本机没有这份记录）'),
@@ -929,7 +988,7 @@ window.__ModuleLoader__.load({
           h(Switch, { checked: !!cfg.enabled, onChange: (v) => save({ enabled: v }) }),
         ),
 
-        h(StatusCard, { s: status, q: cfg.commentQuota, sessionId: cfg.sessionId }),
+        h(StatusCard, { s: status, q: cfg.commentQuota, sessionId: cfg.sessionId, dark }),
 
         // 2026-11-13：本机记录的「这个抖音账号自己」（≠ 上面那位主人）
         (() => {
@@ -952,16 +1011,16 @@ window.__ModuleLoader__.load({
             ),
             // 二次确认：写清清的是什么、后果是什么（主人已经误删过一次）
             selfConfirm ? h('div', {
-              style: { margin: '6px 0 10px', padding: '10px 12px', border: '1px solid #c0392b', borderRadius: 10, background: C.page },
+              style: { margin: '6px 0 10px', padding: '10px 12px', border: '1px solid ' + T.danger, borderRadius: 10, background: C.page },
             },
-              h('div', { style: { fontSize: 12.5, fontWeight: 600, color: '#c0392b' } }, '要清掉的是「这个抖音号是谁」这条记录'),
+              h('div', { style: { fontSize: 12.5, fontWeight: 600, color: T.danger } }, '要清掉的是「这个抖音号是谁」这条记录'),
               h('div', { style: { fontSize: 12, color: C.text2, lineHeight: '19px', marginTop: 4 } },
                 '清掉以后它就认不出自己的号了：判断不了哪条评论是你自己发的，评论可能会漏回；认领主人时也只能按昵称比，容易认错。',
                 '抖音上的号本身不受影响，也不会退出登录。'),
               h('div', { style: { marginTop: 8 } },
                 h('button', {
                   type: 'button', disabled: selfBusy, onClick: () => { setSelfConfirm(false); clearSelf(); },
-                  style: Object.assign({}, btnBase, { background: '#c0392b', color: '#fff', border: '1px solid #c0392b', cursor: selfBusy ? 'default' : 'pointer', marginRight: 8 }),
+                  style: Object.assign({}, btnBase, { background: T.danger, color: '#fff', border: '1px solid ' + T.danger, cursor: selfBusy ? 'default' : 'pointer', marginRight: 8 }),
                 }, selfBusy ? '清除中…' : '确认清除'),
                 h('button', { type: 'button', onClick: () => setSelfConfirm(false), style: Object.assign({}, btnBase, { cursor: 'pointer' }) }, '取消'),
               ),
@@ -991,12 +1050,12 @@ window.__ModuleLoader__.load({
           const bad = g.kind === 'verify' || g.kind === 'login'
           return h('div', {
             style: {
-              border: '1px solid ' + (bad ? '#c0392b' : '#d68910'),
-              background: bad ? '#fdecea' : '#fef5e7',
+              border: '1px solid ' + (bad ? T.danger : T.warnBorder),
+              background: bad ? T.dangerBg : T.warnBg,
               borderRadius: 12, padding: '12px 16px', margin: '10px 0 0',
             },
           },
-            h('div', { style: { fontSize: 13.5, fontWeight: 600, color: bad ? '#c0392b' : '#9c640c' } },
+            h('div', { style: { fontSize: 13.5, fontWeight: 600, color: bad ? T.danger : T.warn } },
               bad ? '⚠️ 需要你本人处理一下（插件已经停手）' : '⏸ 先停了一小会儿'),
             h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '19px', marginTop: 4 } }, g.text || ''),
             g.reason ? h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 4 } }, '看到的证据：' + g.reason) : null,
@@ -1016,9 +1075,9 @@ window.__ModuleLoader__.load({
           const hp = cfg && cfg.health
           if (!hp || !hp.state || hp.state === 'ok') return null
           return h('div', {
-            style: { border: '1px solid #d68910', background: '#fef5e7', borderRadius: 12, padding: '10px 16px', margin: '8px 0 0' },
+            style: { border: '1px solid ' + T.warnBorder, background: T.warnBg, borderRadius: 12, padding: '10px 16px', margin: '8px 0 0' },
           },
-            h('div', { style: { fontSize: 12.5, fontWeight: 600, color: '#9c640c' } }, '⚠️ 评论区接口体检不正常'),
+            h('div', { style: { fontSize: 12.5, fontWeight: 600, color: T.warn } }, '⚠️ 评论区接口体检不正常'),
             h('div', { style: { fontSize: 12, color: C.text2, marginTop: 3 } },
               (hp.text || '') + (hp.evidence ? '（' + hp.evidence + '）' : '')),
             h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 3 } },
@@ -1043,7 +1102,7 @@ window.__ModuleLoader__.load({
               ),
             )
           })(),
-          claimMsg ? h('div', { style: { fontSize: 12, color: claimMsg.indexOf('失败') === 0 ? '#c0392b' : C.text2, padding: '0 0 8px' } }, claimMsg) : null,
+          claimMsg ? h('div', { style: { fontSize: 12, color: claimMsg.indexOf('失败') === 0 ? T.danger : C.text2, padding: '0 0 8px' } }, claimMsg) : null,
           h(Row, { label: '检查一下', hint: '挨个试一遍：能不能打开抖音、屏幕上是不是那个人、回复能不能发出去' },
             h('button', {
               type: 'button', disabled: checkBusy, onClick: runCheck,
@@ -1051,7 +1110,7 @@ window.__ModuleLoader__.load({
             }, checkBusy ? '正在检查…（十几秒）' : '开始检查'),
           ),
           checks ? h('div', { style: { padding: '2px 0 10px', display: 'flex', flexDirection: 'column', gap: 4 } },
-            ...checks.map((c) => h('div', { key: c.key, style: { fontSize: 12.5, color: c.ok ? C.text2 : '#c0392b', lineHeight: '19px' } },
+            ...checks.map((c) => h('div', { key: c.key, style: { fontSize: 12.5, color: c.ok ? C.text2 : T.danger, lineHeight: '19px' } },
               (c.ok ? '✓ ' : '✗ ') + c.name + '：' + c.detail)),
           ) : null,
           h('div', { style: { padding: '2px 0 6px' } },
@@ -1167,7 +1226,7 @@ window.__ModuleLoader__.load({
                 p.name + (p.builtin ? '（内置）' : '（导入）') + (p.enabled === false ? '·已停用' : '')),
             ))),
           ),
-          pNote ? h('div', { style: { fontSize: 12, color: '#d4380d', marginBottom: 6 } }, pNote) : null,
+          pNote ? h('div', { style: { fontSize: 12, color: T.info, marginBottom: 6 } }, pNote) : null,
           personas && personas.list
             ? h('div', { style: { fontSize: 11, color: C.text3, margin: '-2px 0 6px' } },
                 '保存在本机 · 现有 ' + personas.list.length + ' 套（内置的不能改，你自己导入的能改名 / 停用 / 删除）')
