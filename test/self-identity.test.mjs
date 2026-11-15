@@ -9,7 +9,7 @@ import { mergeLearned, resolveSelfIdentity, normalizeStore, SELF_MAX } from '../
 
 const NOW1 = '2026-11-13T10:00:00.000Z'
 const NOW2 = '2026-11-13T11:00:00.000Z'
-const ME = { uid: '7607266828653659185', nick: '一条黄毛大肥鱼' }
+const ME = { uid: '7000000000000000001', nick: '示例本号' }
 
 test('第一次学到 → 记成 current，且只存 uid/昵称/时间（不存凭据）', () => {
   const r = mergeLearned({ learned: ME, store: null, now: NOW1 })
@@ -75,10 +75,10 @@ test('缓存里什么都没有 → none（调用方按"分不清"处理，绝不
 })
 // ── 2026-11-15：self.json 增加 sec_uid（向后兼容）──────────────────────────
 test('老 self.json 没有 sec_uid 字段 → 读进来照常可用，sec_uid 为空串', () => {
-  const legacy = { current: { uid: '760', nick: '一条黄毛大肥鱼', learned_at: '2026-11-11T00:00:00Z' }, known: [] }
+  const legacy = { current: { uid: '760', nick: '示例本号', learned_at: '2026-11-11T00:00:00Z' }, known: [] }
   const st = normalizeStore(legacy)
   assert.equal(st.current.uid, '760')
-  assert.equal(st.current.nick, '一条黄毛大肥鱼')
+  assert.equal(st.current.nick, '示例本号')
   assert.equal(st.current.sec_uid, '', '老文件没有这个字段时给空串，不能崩')
 })
 

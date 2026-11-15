@@ -10,13 +10,13 @@ import assert from 'node:assert/strict'
 import { classifyPageState, decideGate, gateAllows, gateExpired, gateText, isDouyinUrl, GATE } from '../lib/gate-state.mjs'
 
 const NORMAL = {
-  title: '迷迁 - 抖音', href: 'https://www.douyin.com/chat',
+  title: '示例主人 - 抖音', href: 'https://www.douyin.com/chat',
   verifyVisible: false, messageCount: 18,
-  bodyText: '开启读屏标签 读屏标签已关闭 迷迁 周六 顺嘴一句：卡片写232……',
+  bodyText: '开启读屏标签 读屏标签已关闭 示例主人 周六 顺嘴一句：卡片写232……',
 }
 const CHAT_WITH_WORD = {
   ...NORMAL,
-  bodyText: '迷迁 有人问我验证码怎么过，我说那是二次验证……还有别的消息',
+  bodyText: '示例主人 有人问我验证码怎么过，我说那是二次验证……还有别的消息',
 }
 
 test('正常页面 → ok', () => {
@@ -48,7 +48,7 @@ test('登录页（有登录入口且一条聊天都没有）→ login', () => {
 })
 
 test('有聊天内容时出现「立即登录」字样 → 仍是 ok（不误报登录失效）', () => {
-  assert.equal(classifyPageState({ ...NORMAL, bodyText: '立即登录可以看更多 迷迁 你好' }).kind, GATE.OK)
+  assert.equal(classifyPageState({ ...NORMAL, bodyText: '立即登录可以看更多 示例主人 你好' }).kind, GATE.OK)
 })
 
 test('页面空白/没加载 → unknown，且不冒充验证码', () => {
@@ -64,7 +64,7 @@ test('真机踩到的形态：标题空、正文 175 字外壳、聊天 0 条 �
 })
 
 test('真的空会话页（有标题、没消息）→ ok，别误判成故障', () => {
-  const v = classifyPageState({ title: '迷迁 - 抖音', messageCount: 0, verifyVisible: false, bodyText: '私信 会话列表 搜索 还没有新消息，点开某个会话开始聊天' })
+  const v = classifyPageState({ title: '示例主人 - 抖音', messageCount: 0, verifyVisible: false, bodyText: '私信 会话列表 搜索 还没有新消息，点开某个会话开始聊天' })
   assert.equal(v.kind, GATE.OK)
 })
 

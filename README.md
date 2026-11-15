@@ -482,7 +482,7 @@ notice_list_v2[].comment.comment = {
 
 ## 人设库（2026-10-28 改，替代旧的「短人设 + 完整人设」）
 
-一套人设 = 一段正文 + 一个名字，存在 `<home>/personas.json`（默认 `D:\douyin-duty\personas.json`），跟着插件走。
+一套人设 = 一段正文 + 一个名字，存在 `<home>/personas.json`（默认在家目录下：`<home>/personas.json`），跟着插件走。
 
 | 来源 | 能不能改 | 说明 |
 |---|---|---|

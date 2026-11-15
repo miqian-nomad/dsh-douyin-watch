@@ -43,14 +43,14 @@ test('状态①b 老文件只有 uid+nick（本机升级前的样子）→ 仍�
   const home = mkdtempSync(join(tmpdir(), 'dy-self-'))
   try {
     writeFileSync(join(home, 'self.json'), JSON.stringify({
-      current: { uid: '7607266828653659185', nick: '一条黄毛大肥鱼', learned_at: '2026-11-11T05:00:00.000Z' },
+      current: { uid: '7000000000000000001', nick: '示例本号', learned_at: '2026-11-11T05:00:00.000Z' },
       known: [],
     }))
     const st = readStatus(home)
     assert.equal(st.stored, true)
     assert.equal(st.complete, false)
     assert.deepEqual(st.missing, ['sec_uid'])
-    assert.equal(st.uid, '760726…', 'uid 只回前 6 位给界面看')
+    assert.equal(st.uid, '700000…', 'uid 只回前 6 位给界面看')
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
 
@@ -59,8 +59,8 @@ test('状态② 三项齐全 → 提示消失（complete: true、missing 为空�
   try {
     writeFileSync(join(home, 'self.json'), JSON.stringify({
       current: {
-        uid: '7607266828653659185',
-        nick: '一条黄毛大肥鱼',
+        uid: '7000000000000000001',
+        nick: '示例本号',
         sec_uid: 'MS4wLjABAAAAiYfGiPwa0JPrD6YLWSBGEyf7vysMa9zNyebYcTicqlXpY2mYfKV-JF-djYpF5TBN',
         learned_at: '2026-11-15T05:00:00.000Z',
       },
@@ -71,7 +71,7 @@ test('状态② 三项齐全 → 提示消失（complete: true、missing 为空�
     assert.equal(st.complete, true, 'complete=true 界面就不该再显示提示')
     assert.deepEqual(st.missing, [])
     assert.equal(st.hasSec, true)
-    assert.equal(st.nick, '一条黄毛大肥鱼')
+    assert.equal(st.nick, '示例本号')
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
 

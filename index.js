@@ -365,7 +365,7 @@ export function apply(ctx, config) {
   // ⚠️ 2026-10-25 修的坑：子进程跑脚本时会带 `DOUYIN_HOME = cfg.home`，
   //    但**插件自己进程内**调 lib/（outbound-guard 写台账）走的是 `homeDir()` →
   //    只看 process.env.DOUYIN_HOME，没设就回落到 ~/.dsh/douyin-duty。
-  //    结果：脚本写 D:\douyin-duty，台账写 ~/.dsh/douyin-duty —— 两个家目录分裂。
+  //    结果：脚本写插件家目录（home），台账写 ~/.dsh/douyin-duty —— 两个家目录分裂。
   //    这里显式把同一个家目录告诉 lib，别让它们各算各的。
   setGuardHome(cfg.home || HOME)
   const log = (m) => {

@@ -18,26 +18,26 @@ test('uid 明确说不是我 → ok（哪怕昵称撞上了也不认）', () => 
 })
 
 test('uid 拿不到、但昵称一致 → 仍然算 self（老兜底不丢）', () => {
-  assert.equal(classifyCommentSelf({ mine: null, nick: '迷迁', selfNick: '迷迁' }), 'self')
+  assert.equal(classifyCommentSelf({ mine: null, nick: '示例主人', selfNick: '示例主人' }), 'self')
 })
 
 test('uid 拿不到、昵称明确不同 → ok', () => {
-  assert.equal(classifyCommentSelf({ mine: null, nick: '路人', selfNick: '迷迁' }), 'ok')
+  assert.equal(classifyCommentSelf({ mine: null, nick: '路人', selfNick: '示例主人' }), 'ok')
 })
 
 test('uid 和昵称都拿不到 → unknown（分不清就不回，绝不默认放过）', () => {
   assert.equal(classifyCommentSelf({ mine: null, nick: '路人', selfNick: '' }), 'unknown')
-  assert.equal(classifyCommentSelf({ mine: null, nick: '', selfNick: '迷迁' }), 'unknown')
+  assert.equal(classifyCommentSelf({ mine: null, nick: '', selfNick: '示例主人' }), 'unknown')
   assert.equal(classifyCommentSelf({ mine: null, nick: '', selfNick: '' }), 'unknown')
 })
 
 test('缓存给了自己 uid 时，按 uid 精确比（昵称不同也能认）', () => {
-  assert.equal(classifyCommentSelf({ mine: null, uid: '760', selfUid: '760', nick: '一条黄毛大肥鱼', selfNick: '' }), 'self')
+  assert.equal(classifyCommentSelf({ mine: null, uid: '760', selfUid: '760', nick: '示例本号', selfNick: '' }), 'self')
   assert.equal(classifyCommentSelf({ mine: null, uid: '777', selfUid: '760', nick: '同名的人', selfNick: '同名的人' }), 'ok')
   assert.equal(classifyCommentSelf({ mine: null, uid: '', selfUid: '760', nick: '', selfNick: '' }), 'unknown')
 })
 
 test('老版本脚本没给 mine 字段（undefined）时，按"拿不到"处理，不会误判成不是我', () => {
-  assert.equal(classifyCommentSelf({ nick: '迷迁', selfNick: '迷迁' }), 'self')
+  assert.equal(classifyCommentSelf({ nick: '示例主人', selfNick: '示例主人' }), 'self')
   assert.equal(classifyCommentSelf({ nick: '', selfNick: '' }), 'unknown')
 })

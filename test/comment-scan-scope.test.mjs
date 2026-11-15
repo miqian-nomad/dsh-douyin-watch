@@ -213,11 +213,11 @@ test('uid 拿不到但昵称明确不是我 → 照常进候选', async () => {
 })
 
 test('作者昵称拿不到时，不许拿配置里的 owner 当"我自己"（实测两者不是一个号）', async () => {
-  // 真机数据：owner=迷迁（能命令我的人），账号昵称=一条黄毛大肥鱼
+  // 构造数据：owner=示例主人（能命令我的人），账号昵称=示例本号（昵称/uid 都是假的）
   const h = harness({
     known: ['w1'],
-    cfg: { owner: '迷迁' },
-    workResult: WORK([{ cid: 'c3', nick: '一条黄毛大肥鱼', text: '这条其实是我自己发的', time: 1, mine: null }], null),
+    cfg: { owner: '示例主人' },
+    workResult: WORK([{ cid: 'c3', nick: '示例本号', text: '这条其实是我自己发的', time: 1, mine: null }], null),
   })
   await runOnce(h)
   assert.equal(h.runtime.lastCommentScan.items, 0, '认不出账号昵称时不能当成"别人"，否则就回自己了')
@@ -228,13 +228,13 @@ test('详情接口给了本账号 uid → 写进本机记录（身份只存账�
     known: ['w1'],
     workResult: {
       works: [], discovered: [],
-      author: { nick: '一条黄毛大肥鱼', uid: '7607266828653659185' },
+      author: { nick: '示例本号', uid: '7000000000000000001' },
     },
   })
   await runOnce(h)
   assert.equal(h.selfWrites.length, 1, '应该写一次 self.json')
-  assert.equal(h.selfWrites[0].current.uid, '7607266828653659185')
-  assert.equal(h.selfWrites[0].current.nick, '一条黄毛大肥鱼')
+  assert.equal(h.selfWrites[0].current.uid, '7000000000000000001')
+  assert.equal(h.selfWrites[0].current.nick, '示例本号')
   assert.ok(h.logs.some((l) => l.includes('本机账号身份记住了')))
 })
 
