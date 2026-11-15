@@ -11,12 +11,20 @@ window.__ModuleLoader__.load({
     const MINUTES = ['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55'];
 
     const C = {
-      line: 'var(--dsw-alias-border-l, rgba(0,0,0,0.10))',
+      // 2026-11-15（深色主题卡片"消失"）：变量名要对上 DSH 真正定义的那一套。
+      //   实测（读 DSH 打包 CSS）：--dsw-alias-border-l **不存在**（真实是 border-l1..l4），
+      //   以前一直掉进浅色兜底 rgba(0,0,0,0.10) → 深色下几乎看不见。
+      //   现在用 l2：浅色 rgba(0,0,0,0.10)（与原来完全一致），深色 rgba(255,255,255,0.12)。
+      line: 'var(--dsw-alias-border-l2, rgba(0,0,0,0.10))',
       text: 'var(--dsw-alias-label-primary, #0f1115)',
       text2: 'var(--dsw-alias-label-secondary, rgba(15,17,21,0.72))',
       text3: 'var(--dsw-alias-label-tertiary, rgba(15,17,21,0.45))',
-      card: 'var(--dsw-alias-bg-base, #ffffff)',
+      //   卡片底色：bg-base 在深色主题下就是页面底色（#151517），所以卡片"看不见"。
+      //   DSH 自己的卡片用的是 bg-layer-1（浅色 #fff / 深色 #232324），比页面亮一层。
+      card: 'var(--dsw-alias-bg-layer-1, #ffffff)',
       brand: 'var(--dsw-alias-brand-primary, #0f1115)',
+      // 悬停底色：DSH 里叫 interactive-bg-hover（没有 bg-hover 这个变量）
+      hover: 'var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.18))',
     };
 
     // ── 原生 <select> 的下拉弹层（issue #4）────────────────────────────────
@@ -29,7 +37,7 @@ window.__ModuleLoader__.load({
       '  [data-dy-panel] select { appearance: base-select; }',
       '  [data-dy-panel] select::picker(select) {',
       '    appearance: base-select;',
-      '    background: var(--dsw-alias-bg-base, #ffffff);',
+      '    background: var(--dsw-alias-bg-layer-1, #ffffff);',
       '    color: var(--dsw-alias-label-primary, #0f1115);',
       '    border: 1px solid ' + C.line + ';',
       '    border-radius: 10px;',
@@ -38,14 +46,14 @@ window.__ModuleLoader__.load({
       '    box-shadow: 0 8px 24px rgba(0,0,0,0.18);',
       '  }',
       '  [data-dy-panel] option {',
-      '    background: var(--dsw-alias-bg-base, #ffffff);',
+      '    background: var(--dsw-alias-bg-layer-1, #ffffff);',
       '    color: var(--dsw-alias-label-primary, #0f1115);',
       '    padding: 6px 10px;',
       '    border-radius: 6px;',
       '  }',
       '  [data-dy-panel] option:checked,',
       '  [data-dy-panel] option:hover {',
-      '    background: var(--dsw-alias-bg-hover, rgba(127,127,127,0.18));',
+      '    background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.18));',
       '    color: var(--dsw-alias-label-primary, #0f1115);',
       '  }',
       '  [data-dy-panel] option:disabled { color: ' + C.text3 + '; }',
