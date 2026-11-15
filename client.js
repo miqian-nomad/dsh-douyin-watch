@@ -25,6 +25,9 @@ window.__ModuleLoader__.load({
       brand: 'var(--dsw-alias-brand-primary, #0f1115)',
       // 悬停底色：DSH 里叫 interactive-bg-hover（没有 bg-hover 这个变量）
       hover: 'var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.18))',
+      // 页面底色（2026-11-15）：只给"必须和页面无缝"的东西用 —— 目前只有吸顶标签栏。
+      //   ⚠️ 别拿它当卡片底色：深色下它等于页面色，卡片会"消失"（上一轮踩过）。
+      page: 'var(--dsw-alias-bg-base, #ffffff)',
     };
 
     // ── 原生 <select> 的下拉弹层（issue #4）────────────────────────────────
@@ -559,7 +562,10 @@ window.__ModuleLoader__.load({
           style: {
             position: 'sticky', top: 0, zIndex: 5, display: 'flex', flexWrap: 'wrap',
             gap: 6, padding: '6px 0 8px', marginBottom: 2,
-            background: C.card || 'transparent',
+            // 吸顶栏必须和**页面底色**同色：深色下卡片色(layer-1 #232324)比页面(#151517)亮，
+            //   吸顶时就成了一块压在标题上的浅板（2026-11-15 主人截图指出）。
+            //   也别用 transparent —— 滚动时下面的文字会和标签叠在一起。
+            background: C.page,
           },
         },
           ...SECTIONS.map((s) => h('button', {
