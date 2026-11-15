@@ -24,25 +24,51 @@ const out = (o) => { process.stdout.write(JSON.stringify(o) + '\n') }
 // --dry：只检查、不写 owner.json（给设置页的「检查一下」用）
 const DRY = process.argv.includes('--dry')
 
-// 从右栏会话里取对端身份：先看消息节点的 React 数据，再退一步看右栏标题
+// 从「当前打开的那条会话」取对端身份。
+//   2026-11-14（issue #5）：抖音改版后消息气泡的 fiber 里已经没有 conversation / toParticipantSecUserId
+//     —— 实测 58 个 [class*="messageMessageBox"] 节点，0 个带这个字段；
+//     而左侧会话列表的「当前选中项」仍然挂着 conversation 对象。
+//   所以取法按可靠性排序，三路都保留（老版本页面还能走前两路）：
+//     ① 会话列表当前选中项（现在唯一可靠的来源，带 curCon 类名）
+//     ② 消息气泡 fiber（旧版页面；新版取不到）
+//     ③ 右栏标题的 fiber（更老的页面）
+//   ⚠️ 只认 React 状态里的 conversation，**绝不**从页面 HTML 里搜 sec_uid 兜底 ——
+//     分享文案里就有别人的 sec_uid，认错主人比拿不到 ID 更糟（issue #5 作者的提醒，同意）。
 const OPENED_PEER = `(function () {
-  var secOf = function (n) {
+  var fiberOf = function (n) {
     var fk = Object.keys(n).find(function (k) { return k.indexOf('__reactFiber$') === 0 });
-    if (!fk) return '';
-    var f = n[fk], d = 0;
-    while (f && d < 14) {
+    return fk ? n[fk] : null;
+  };
+  var secOf = function (n, max) {
+    var f = fiberOf(n), d = 0;
+    while (f && d < (max || 14)) {
       var p = f.memoizedProps;
       if (p && p.conversation && p.conversation.toParticipantSecUserId) return String(p.conversation.toParticipantSecUserId);
       f = f.return; d++;
     }
     return '';
   };
-  var msgs = document.querySelectorAll('[class*="messageMessageBox"]');
-  for (var i = 0; i < msgs.length; i++) { var s = secOf(msgs[i]); if (s) return JSON.stringify({ sec: s, via: 'msg' }); }
   var h = document.querySelector('[class*="RightPanelHeadertitle"]');
   var title = h ? String(h.innerText || '').trim() : '';
+
+  // ① 会话列表里「当前选中」那一项
+  var items = document.querySelectorAll('[class*="conversationConversationItem"]');
+  for (var i = 0; i < items.length; i++) {
+    var cel = items[i];
+    var cls = String(cel.className || '');
+    if (cls.indexOf('curCon') < 0 && cls.indexOf('curConversation') < 0) continue;
+    var s1 = secOf(cel, 12);
+    if (s1) return JSON.stringify({ sec: s1, title: title, via: 'conv' });
+  }
+
+  // ② 消息气泡（旧版页面才有）
+  var msgs = document.querySelectorAll('[class*="messageMessageBox"]');
+  for (var m = 0; m < msgs.length; m++) { var s2 = secOf(msgs[m], 14); if (s2) return JSON.stringify({ sec: s2, title: title, via: 'msg' }); }
+
+  // ③ 右栏标题的 fiber
   var t = h;
-  for (var j = 0; t && j < 6; j++) { var s2 = secOf(t); if (s2) return JSON.stringify({ sec: s2, title: title, via: 'head' }); t = t.parentElement; }
+  for (var j = 0; t && j < 6; j++) { var s3 = secOf(t, 8); if (s3) return JSON.stringify({ sec: s3, title: title, via: 'head' }); t = t.parentElement; }
+
   return JSON.stringify({ sec: '', title: title, via: 'none' });
 })()`
 

@@ -141,6 +141,19 @@ const OPENED_PEER = `(function () {
   //   只有右栏标题跟目标一致（或页面干脆没给标题）时，才敢用本地 sec_uid 兜底。
   var fallback = ${JSON.stringify(String(peerCfg.sec_uid || ''))};
   var want = ${JSON.stringify(String(TO || ''))};
+  // 2026-11-14（issue #5）：抖音改版后消息气泡 fiber 里没有 conversation 了，
+  //   当前选中会话的「左侧列表项」还挂着 → 先看它，再退回气泡/标题（老页面仍可用）。
+  var items = document.querySelectorAll('[class*="conversationConversationItem"]');
+  for (var ci = 0; ci < items.length; ci++) {
+    var cls = String(items[ci].className || '');
+    if (cls.indexOf('curCon') < 0 && cls.indexOf('curConversation') < 0) continue;
+    var sc = secOf(items[ci]);
+    if (sc) {
+      var hh = document.querySelector('[class*="RightPanelHeadertitle"]');
+      var tt = hh ? String(hh.innerText || '').trim() : '';
+      return JSON.stringify({ sec: sc, title: tt, via: 'conv' });
+    }
+  }
   var msgs = document.querySelectorAll('[class*="messageMessageBox"]');
   for (var i = 0; i < msgs.length; i++) { var s = secOf(msgs[i]); if (s) return JSON.stringify({ sec: s, via: 'msg' }); }
   var h = document.querySelector('[class*="RightPanelHeadertitle"]');

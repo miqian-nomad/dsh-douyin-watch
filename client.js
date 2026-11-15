@@ -19,8 +19,54 @@ window.__ModuleLoader__.load({
       brand: 'var(--dsw-alias-brand-primary, #0f1115)',
     };
 
-    const parseWin = (s) => {
-      const m = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/.exec(String(s || '').trim());
+    // ── 原生 <select> 的下拉弹层（issue #4）────────────────────────────────
+    // 弹层由浏览器自己绘制：只给 select 设 color 时，深色主题下弹层仍是白底浅字。
+    // 实测：本机 Chromium 151 支持 appearance: base-select / ::picker(select)，
+    //   加上它之后弹层变成可样式化的 DOM，能吃到主题变量；不支持的版本 CSS 被忽略，
+    //   表现和现在一样（不比现在差）。只作用于本插件面板，不碰 DSH 其它页面。
+    const SELECT_THEME_CSS = [
+      '@supports (appearance: base-select) {',
+      '  [data-dy-panel] select { appearance: base-select; }',
+      '  [data-dy-panel] select::picker(select) {',
+      '    appearance: base-select;',
+      '    background: var(--dsw-alias-bg-base, #ffffff);',
+      '    color: var(--dsw-alias-label-primary, #0f1115);',
+      '    border: 1px solid ' + C.line + ';',
+      '    border-radius: 10px;',
+      '    padding: 4px;',
+      '    margin-top: 4px;',
+      '    box-shadow: 0 8px 24px rgba(0,0,0,0.18);',
+      '  }',
+      '  [data-dy-panel] option {',
+      '    background: var(--dsw-alias-bg-base, #ffffff);',
+      '    color: var(--dsw-alias-label-primary, #0f1115);',
+      '    padding: 6px 10px;',
+      '    border-radius: 6px;',
+      '  }',
+      '  [data-dy-panel] option:checked,',
+      '  [data-dy-panel] option:hover {',
+      '    background: var(--dsw-alias-bg-hover, rgba(127,127,127,0.18));',
+      '    color: var(--dsw-alias-label-primary, #0f1115);',
+      '  }',
+      '  [data-dy-panel] option:disabled { color: ' + C.text3 + '; }',
+      '}',
+      // 兜底：不支持的浏览器上，至少让 option 的文字色跟着主题走
+      '[data-dy-panel] option { color: var(--dsw-alias-label-primary, #0f1115); }',
+    ].join('\n')
+
+    const ensureSelectTheme = () => {
+      try {
+        if (typeof document === 'undefined' || !document.head) return
+        if (document.getElementById('dy-select-theme')) return
+        const st = document.createElement('style')
+        st.id = 'dy-select-theme'
+        st.textContent = SELECT_THEME_CSS
+        document.head.appendChild(st)
+      } catch { /* 注入失败不影响设置页 */ }
+    }
+    ensureSelectTheme()
+
+    const parseWin = (s) => {      const m = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/.exec(String(s || '').trim());
       if (!m) return { start: '', end: '' };
       const pad = (t) => (t.length === 4 ? '0' + t : t);
       return { start: pad(m[1]), end: pad(m[2]) };
