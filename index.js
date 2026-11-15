@@ -119,6 +119,8 @@ const DEFAULTS = {
   subtitleOcr: false,
   // 2026-11-13：评论区接口定时体检（小时）。0 = 关掉；范围 1–72；不填默认 6
   probeHours: 6,
+  // 2026-11-15：首次引导是否走完。老用户如果没有这个键但已经配好了身份，会被自动当作 true
+  onboarded: false,
   onlyNewest: true,
   // ⭐ 钉死一个会话（可带/不带 session- 前缀）。设了它就**不再靠 agent/created + cwd 去"逮" agent**：
   //    先找活着的；没有就 ctx.agents.resume() 把那条会话恢复出来再投递。
@@ -195,6 +197,8 @@ const DEFAULTS = {
   chatReadScript: join(HERE, 'tools', 'chat-read-once.mjs'),
   // 2026-11-07：认领主人 —— 读"当前打开的那条会话"的对端身份，写 owner.json
   claimScript: join(HERE, 'tools', 'claim-owner.mjs'),
+  // 2026-11-15：主动识别「本号是谁」（向导第 2 步；也是 self.json 补 sec_uid 的唯一主动入口）
+  whoamiSelfScript: join(HERE, 'tools', 'whoami-self.mjs'),
   // 2026-11-13：闸门挡住之后，用它轻量探一眼「主人处理完没有」（只读，不导航）
   pageStateScript: join(HERE, 'tools', 'page-state.mjs'),
   cookieSaveScript: join(HERE, 'tools', 'cookie-save.mjs'),
@@ -367,6 +371,27 @@ export function apply(ctx, config) {
     try { appendFileSync(cfg.logFile, `[${new Date().toISOString()}] ${m}\n`) } catch { /* 日志写不进去不影响主流程 */ }
   }
 
+  // ── 首次引导的状态（2026-11-15）────────────────────────────────────────
+  //   老用户不该被强制走一遍：只要 owner.json 里已经有 sec_uid（= 以前认领过），
+  //   就当作「已引导」，顺手把 onboarded 落盘，以后不再问。
+  try {
+    if (cfg.onboarded !== true) {
+      let claimed = false
+      try {
+        const o = JSON.parse(readFileSync(join(cfg.home || HOME, 'owner.json'), 'utf8'))
+        claimed = !!(o && String(o.sec_uid || '').trim())
+      } catch { claimed = false }
+      if (claimed) {
+        cfg.onboarded = true
+        let disk = {}
+        try { disk = JSON.parse(readFileSync(cfgPath, 'utf8')) || {} } catch { disk = {} }
+        disk.onboarded = true
+        try { writeFileSync(cfgPath, JSON.stringify(disk, null, 2)) } catch { /* 写不了就只在内存里生效 */ }
+        log('已有认领记录 → 视为已完成首次引导（不再强制走向导）')
+      }
+    }
+  } catch { /* 迁移失败不影响主流程 */ }
+
   // ── 统一跑一个 node 脚本（9334 Chrome 侧），返回 { ok, parsed, error, raw } ──
   const runNode = (script, args = [], timeoutMs = 120000) => new Promise((resolve) => {
     execFile(cfg.nodeBin || process.execPath, [script, ...args], {
@@ -401,7 +426,7 @@ export function apply(ctx, config) {
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
   // 2026-11-07：补上 peer / owner —— 这两个是「要盯的会话昵称」和「主人昵称」，
   //   以前根本不在白名单里，设置页就算发上来也会被写盘循环丢掉（issue #1 的根因）。
-  const TOGGLE_KEYS = ['enabled', 'peer', 'owner', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaPreset', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir', 'subtitleOcr', 'probeHours']
+  const TOGGLE_KEYS = ['enabled', 'peer', 'owner', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaPreset', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir', 'subtitleOcr', 'probeHours', 'onboarded']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -461,7 +486,7 @@ export function apply(ctx, config) {
           o.status.signed = existsSync(signScript)
           o.status.signedDeps = existsSync(join(pyRoot, 'curl_cffi')) && existsSync(join(pyRoot, 'cryptography'))
         } catch { o.status.signed = false; o.status.signedDeps = false }
-        o.commentQuota = guardStats({ perHour: cfg.commentPerHour, perDay: cfg.commentPerDay }); o.commentScan = runtime.lastCommentScan || null; o.self = (() => { try { const st = readSelfStore(); const c = st.current; return c ? { stored: true, uid: c.uid ? (c.uid.slice(0, 6) + '…') : '', nick: c.nick || '', learned_at: c.learned_at || '' } : { stored: false } } catch { return { stored: false } } })(); o.health = runtime.healthState || null; o.probeHours = healthHours(); o.gate = runtime.gate ? { kind: runtime.gate.kind, at: runtime.gate.at, reason: runtime.gate.reason || '', retryAt: Number(runtime.gate.retryAt) || 0, needsOwner: !!runtime.gate.needsOwner, where: runtime.gate.where || '', text: gateText(runtime.gate), lastProbe: runtime.gate.lastProbe || null } : null; return o }
+        o.commentQuota = guardStats({ perHour: cfg.commentPerHour, perDay: cfg.commentPerDay }); o.commentScan = runtime.lastCommentScan || null; o.self = (() => { try { const st = readSelfStore(); const c = st.current; return c ? { stored: true, uid: c.uid ? (c.uid.slice(0, 6) + '…') : '', nick: c.nick || '', learned_at: c.learned_at || '' } : { stored: false } } catch { return { stored: false } } })(); o.onboarded = cfg.onboarded === true; o.health = runtime.healthState || null; o.probeHours = healthHours(); o.gate = runtime.gate ? { kind: runtime.gate.kind, at: runtime.gate.at, reason: runtime.gate.reason || '', retryAt: Number(runtime.gate.retryAt) || 0, needsOwner: !!runtime.gate.needsOwner, where: runtime.gate.where || '', text: gateText(runtime.gate), lastProbe: runtime.gate.lastProbe || null } : null; return o }
         const pathname = (req.url || '').split('?')[0]
         // GET /api/douyin-watch/sessions —— 给设置页的「钉死会话」选择器（只读）
         //   优先问 DSH 自己的会话服务（就是 GUI 会话列表那份数据）；拿不到再扫 ~/.dsh/sessions 目录。
@@ -636,6 +661,133 @@ export function apply(ctx, config) {
             note: '已经先放行了，但探针看到页面还不正常（' + String((probe && probe.evidence) || '没拿到原因') + '）；下一轮要是又被拦会再停',
             config: await view(),
           })
+        }
+        // ── 首次引导（2026-11-15）──────────────────────────────────────────
+        //   七步各自一个动作，判据都在后端；前端只显示。
+        //   顺序按主人定的来：① 认领会话 → ② 登录 → ③ 确认本号 → ④ 认领主人 → ⑤ 谁能命令 → ⑥ 干什么活 → ⑦ 体检
+        if (req.method === 'POST' && pathname === '/api/douyin-watch/onboard/session') {
+          // 第 1 步：绑定「用哪个 DSH 对话干活」（= watch-config.json 的 sessionId）
+          let body = {}
+          try {
+            const raw = await new Promise((r) => { let d = ''; req.on('data', (c) => { d += c }); req.on('end', () => r(d)) })
+            body = JSON.parse(raw || '{}')
+          } catch { body = {} }
+          const want = String(body.sessionId || '').trim()
+          if (want) {
+            // 必须能在会话列表里找到，否则等于绑了个不存在的对话
+            let found = null
+            try {
+              const sc = ctx.get?.('sessionController')
+              const res = sc && typeof sc.list === 'function' ? await sc.list({}) : null
+              const items = (res && Array.isArray(res.items)) ? res.items : []
+              found = items.find((it) => normSid(it.sessionId) === normSid(want)) || null
+            } catch (e) { log('引导：列会话失败 ' + ((e && e.message) || e)) }
+            if (!found) {
+              return sendJson(200, { ok: false, why: '找不到这个对话（列表里没有它）。点「重新读列表」再选一次，或者选「不钉死，自动找最近在用的」' })
+            }
+          }
+          cfg.sessionId = want
+          fileCfg.sessionId = want
+          try {
+            let disk = {}
+            try { disk = JSON.parse(readFileSync(cfg.cfgFile, 'utf8')) || {} } catch { disk = {} }
+            disk.sessionId = want
+            writeFileSync(cfg.cfgFile, JSON.stringify(disk, null, 2))
+          } catch (e) { log('引导：写 sessionId 失败 ' + ((e && e.message) || e)) }
+          // 立即生效：改了就重绑（跟设置页保存同一条路）
+          try {
+            if (cfg.enabled) { stopAll('引导里换了会话'); bindNow('引导里换会话') }
+          } catch { /* 重绑失败不影响保存 */ }
+          log('引导：绑定会话 → ' + (want || '(不钉死，自动找最近在用的)'))
+          return sendJson(200, { ok: true, sessionId: want, config: await view() })
+        }
+        if (req.method === 'POST' && pathname === '/api/douyin-watch/onboard/login-check') {
+          // 第 1 步：能读到私信才算真登录（标题是会话对端昵称、能读评论只带 ttwid 就行，都不能当判据）
+          const r = await runNode(cfg.chatReadScript, ['--force-chat'], 150000)
+          const p = (r && r.parsed) || {}
+          const msgs = Array.isArray(p.messages) ? p.messages : []
+          if (msgs.length > 0) return sendJson(200, { ok: true, count: msgs.length, config: await view() })
+          const st = String(p.state || '')
+          let why = '没读到任何私信。先在抖音里点开一个会话，或者确认这个号确实登录了'
+          if (st === GATE.LOGIN) why = '页面要求登录：请在抖音窗口里扫码登录一次'
+          else if (st === GATE.VERIFY) why = '页面被验证码挡住了：先过一次滑块（维护 → 切有头 + 触发验证）'
+          else if (st === GATE.UNKNOWN) why = '页面没加载出来：等一下再试，或切有头窗口看看'
+          else if (p.note) why = String(p.note)
+          return sendJson(200, { ok: false, why, state: st })
+        }
+        if (req.method === 'POST' && pathname === '/api/douyin-watch/onboard/identify') {
+          // 第 2 步：主动识别本号（uid + 昵称 + sec_uid），并写进 self.json（补上 sec_uid）
+          const r = await runNode(cfg.whoamiSelfScript, [], 120000)
+          const p = (r && r.parsed) || {}
+          if (!p.ok) {
+            return sendJson(200, { ok: false, why: String(p.why || '识别失败（没拿到原因）') })
+          }
+          let wrote = false
+          try {
+            const merged = mergeLearned({ learned: { uid: p.uid, nick: p.nick, sec_uid: p.sec_uid }, store: readSelfStore(), now: new Date().toISOString() })
+            if (merged.changed) { writeSelfStore(merged.store); wrote = true }
+          } catch (e) { log('写本机账号记录失败：' + ((e && e.message) || e)) }
+          log('识别本号：' + (p.nick || '(无昵称)') + '（uid=' + (p.uid || '?') + (wrote ? '，已写入 self.json' : '') + '）')
+          return sendJson(200, {
+            ok: true,
+            me: { uid: String(p.uid || ''), nick: String(p.nick || ''), has_sec: !!String(p.sec_uid || '').trim() },
+            wrote, config: await view(),
+          })
+        }
+        if (req.method === 'POST' && pathname === '/api/douyin-watch/onboard/claim') {
+          // 第 3 步：认领主人（复用同一条链路；本号自己的判断在 claim-owner 里按 sec_uid 做）
+          const r = await runNode(cfg.claimScript, [], 150000)
+          const p = (r && r.parsed) || {}
+          if (!p || !p.ok) {
+            return sendJson(200, {
+              ok: false, self_claim: !!(p && p.self_claim),
+              why: String((p && p.error) || '认领没成功'),
+            })
+          }
+          const rec = readOwnerClaim()
+          if (rec && rec.nick && !String(cfg.peer || '').trim()) {
+            cfg.peer = rec.nick; fileCfg.peer = rec.nick
+            try {
+              let disk = {}
+              try { disk = JSON.parse(readFileSync(cfg.cfgFile, 'utf8')) || {} } catch { disk = {} }
+              disk.peer = rec.nick
+              writeFileSync(cfg.cfgFile, JSON.stringify(disk, null, 2))
+            } catch { /* 写不了不影响认领 */ }
+          }
+          log('引导：已认领主人 ' + ((rec && rec.nick) || '(无昵称)'))
+          return sendJson(200, {
+            ok: true, claim: rec, config: await view(),
+            ...(p.sameNickDifferentId ? { sameNickDifferentId: true, note: p.note } : {}),
+          })
+        }
+        if (req.method === 'POST' && pathname === '/api/douyin-watch/onboard/finish') {
+          // 第 4/5 步 + 收尾：把引导里选的写回同一份配置（不另起一套写入逻辑）
+          let body = {}
+          try {
+            const raw = await new Promise((r) => { let d = ''; req.on('data', (c) => { d += c }); req.on('end', () => r(d)) })
+            body = JSON.parse(raw || '{}')
+          } catch { body = {} }
+          let disk = {}
+          try { disk = JSON.parse(readFileSync(cfg.cfgFile, 'utf8')) || {} } catch { disk = {} }
+          for (const k of TOGGLE_KEYS) {
+            if (body[k] !== undefined) { cfg[k] = body[k]; fileCfg[k] = body[k]; disk[k] = body[k] }
+          }
+          disk.onboarded = true
+          cfg.onboarded = true
+          try { writeFileSync(cfg.cfgFile, JSON.stringify(disk, null, 2)) } catch (e) { log('写配置失败：' + ((e && e.message) || e)) }
+          log('首次引导完成（私信回=' + !!cfg.ownerAutoReply + '，作品评论=' + !!cfg.commentAutoReplyWork + '，别人评论=' + !!cfg.commentAutoReplyOthers + '）')
+          return sendJson(200, { ok: true, config: await view() })
+        }
+        if (req.method === 'POST' && pathname === '/api/douyin-watch/onboard/reset') {
+          cfg.onboarded = false; fileCfg.onboarded = false
+          try {
+            let disk = {}
+            try { disk = JSON.parse(readFileSync(cfg.cfgFile, 'utf8')) || {} } catch { disk = {} }
+            disk.onboarded = false
+            writeFileSync(cfg.cfgFile, JSON.stringify(disk, null, 2))
+          } catch { /* 写不了就只在内存里 */ }
+          log('主人点了「重新引导」')
+          return sendJson(200, { ok: true, config: await view() })
         }
         if (req.method === 'POST' && pathname === '/api/douyin-watch/doctor') {
           const checks = []

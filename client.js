@@ -168,6 +168,261 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // ── 首次引导（2026-11-15）──────────────────────────────────────────────
+    //   设计原则：每步只问一件事；能自动读的绝不让主人填；判据都在后端，前端只显示。
+    //   第 1、3 步不能跳过（没登录什么都不能干；没认主人分不清谁的话算命令），其余可稍后。
+    const WIZ_STEPS = ['登录抖音号', '确认本号', '认领主人', '谁能命令它', '让它干什么活']
+
+    function WizStatus({ state, text }) {
+      const color = state === 'ok' ? '#1f9d55' : state === 'fail' ? '#c0392b' : C.text3
+      return h('div', { style: { display: 'flex', gap: 6, alignItems: 'flex-start', fontSize: 12, color, lineHeight: '19px', marginTop: 8 } },
+        h('span', { style: { flex: '0 0 auto', fontWeight: 700 } }, state === 'ok' ? '✓' : state === 'fail' ? '✕' : '○'),
+        h('span', null, text || (state === 'ok' ? '已通过' : state === 'fail' ? '还没通过' : '还没检测')),
+      )
+    }
+
+    function Wizard({ cfg, setCfg, onDone }) {
+      const [step, setStep] = useState(1)
+      const [status, setStatus] = useState({})
+      const [msg, setMsg] = useState({})
+      const [busy, setBusy] = useState('')
+      const [me, setMe] = useState(null)
+      const [owner, setOwner] = useState(null)
+      const [sessions, setSessions] = useState(null)
+      const [sessionId, setSessionId] = useState(cfg.sessionId || '')
+      const [authority, setAuthority] = useState(cfg.strangerPolicy === 'ignore' ? 'owner' : (cfg.strangerPolicy === 'reply' ? 'reply' : 'notify'))
+      const [tasks, setTasks] = useState({ dm: cfg.ownerAutoReply !== false, work: !!cfg.commentAutoReplyWork, others: !!cfg.commentAutoReplyOthers })
+      const [onlyDuty, setOnlyDuty] = useState(false)
+      const [replyMode, setReplyMode] = useState(cfg.replyMode || 'conclusion')
+      const [perHour, setPerHour] = useState(cfg.commentPerHour || 30)
+      const [checks, setChecks] = useState(null)
+      const [warn, setWarn] = useState('')
+
+      const setStat = (n, s, m) => {
+        setStatus((p) => ({ ...p, [n]: s }))
+        setMsg((p) => ({ ...p, [n]: m || '' }))
+      }
+      const post = (path, body) => fetch('/api/douyin-watch/onboard/' + path, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}),
+      }).then((r) => r.json())
+
+      const loadSessions = () => {
+        setBusy('list')
+        fetch('/api/douyin-watch/sessions').then((r) => r.json())
+          .then((d) => { setSessions(Array.isArray(d.sessions) ? d.sessions : []); setBusy('') })
+          .catch(() => { setSessions([]); setBusy('') })
+      }
+      useEffect(() => { loadSessions() }, [])
+
+      const saveSession = () => {
+        setBusy('session')
+        post('session', { sessionId }).then((d) => {
+          setBusy('')
+          if (d && d.ok) setStat(1, 'ok', sessionId ? '已绑定到你选的那个对话' : '不钉死 —— 新消息会发到最近在用的那个对话')
+          else setStat(1, 'fail', (d && d.why) || '保存失败')
+        }).catch(() => { setBusy(''); setStat(1, 'fail', '保存失败：接口没回应') })
+      }
+      const openBrowser = () => {
+        setBusy('browser'); setWarn('')
+        fetch('/api/douyin-watch/browser-mode', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'headed', goto: 'https://www.douyin.com/chat' }),
+        }).then((r) => r.json())
+          .then((d) => {
+            setBusy('')
+            setStat(2, status[2] === 'ok' ? 'ok' : 'idle', d && d.ok
+              ? '抖音窗口已弹出，请在那个窗口里自己扫码/输密码。登录好点右边「我登录好了，检测」——密码和验证码我们不代填。'
+              : ('打不开浏览器窗口：' + ((d && d.error) || '没拿到原因')))
+          })
+          .catch(() => { setBusy(''); setStat(2, 'fail', '切有头失败：接口没回应') })
+      }
+      const checkLogin = () => {
+        setBusy('login')
+        post('login-check').then((d) => {
+          setBusy('')
+          if (d && d.ok) setStat(2, 'ok', '读到 ' + d.count + ' 条私信 —— 登录确实生效了')
+          else setStat(2, 'fail', (d && d.why) || '没读到私信')
+        }).catch(() => { setBusy(''); setStat(2, 'fail', '检测失败：接口没回应') })
+      }
+      const identify = () => {
+        setBusy('me')
+        post('identify').then((d) => {
+          setBusy('')
+          if (d && d.ok) { setMe(d.me || null); setStat(3, 'ok', '先认一下，确认没问题点下面「对，就是我」') }
+          else setStat(3, 'fail', (d && d.why) || '识别失败')
+        }).catch(() => { setBusy(''); setStat(3, 'fail', '识别失败：接口没回应') })
+      }
+      const claim = () => {
+        setBusy('claim')
+        post('claim').then((d) => {
+          setBusy('')
+          if (d && d.ok) {
+            const n = (d.claim && d.claim.nick) || '对方'
+            setOwner(d.claim || null)
+            setStat(4, 'ok', '已认领：' + n + (d.sameNickDifferentId ? '（同名、不同号，已按 ID 放行）' : ''))
+          } else setStat(4, 'fail', (d && d.why) || '认领没成功')
+        }).catch(() => { setBusy(''); setStat(4, 'fail', '认领失败：接口没回应') })
+      }
+      const finish = () => {
+        if (!tasks.dm && !tasks.work && !tasks.others && !onlyDuty) {
+          setWarn('你一个自动回复都没勾。如果只想让它值守，请勾上面那句「只值守、不自动回复」')
+          return
+        }
+        setWarn(''); setBusy('finish')
+        post('finish', {
+          ownerAutoReply: !!tasks.dm,
+          strangerPolicy: authority === 'owner' ? 'ignore' : (authority === 'notify' ? 'notify' : 'reply'),
+          commentAutoReply: !!(tasks.work || tasks.others),
+          commentAutoReplyWork: !!tasks.work,
+          commentAutoReplyOthers: !!tasks.others,
+          replyMode,
+          commentPerHour: Math.max(1, Math.min(200, Number(perHour) || 30)),
+        }).then((d) => {
+          if (d && d.config) setCfg(d.config)
+          return fetch('/api/douyin-watch/doctor', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }).then((r) => r.json())
+        }).then((d) => { setBusy(''); setChecks((d && d.checks) || []); setStep(7) })
+          .catch(() => { setBusy(''); setWarn('保存失败：接口没回应') })
+      }
+
+      const steps = ['认领会话', '登录抖音号', '确认本号', '认领主人', '谁能命令它', '让它干什么活', '体检']
+      const checkStep = { session: 1, page: 2, gate: 2, who: 4, 'comment-api': 6 }
+      const mustDo = { 1: true, 2: true, 4: true }
+      const canGo = (n) => (mustDo[n] ? status[n] === 'ok' : true)
+      const next = () => { if (step < 6 && canGo(step)) { setStep(step + 1); setWarn('') } }
+      const prev = () => { if (step > 1) { setStep(step - 1); setWarn('') } }
+      const btn = (label, onClick, opts) => h('button', {
+        type: 'button', disabled: !!opts?.disabled, onClick,
+        style: Object.assign({}, btnBase, {
+          marginRight: 8, cursor: opts?.disabled ? 'default' : 'pointer', opacity: opts?.disabled ? 0.55 : 1,
+          ...(opts?.primary ? { background: C.brand, color: '#fff', border: '1px solid ' + C.brand } : {}),
+        }),
+      }, label)
+
+      const body = []
+      if (step === 1) {
+        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '20px' } },
+          '新消息来了，插件是去「叫醒一个对话」；后面认本号、认主人，也都是那个对话里的模型做的。所以先定：用哪个对话干活。'))
+        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '8px 0', cursor: 'pointer' } },
+          h('input', { type: 'radio', name: 'dy-sess', checked: !sessionId, onChange: () => setSessionId(''), style: { marginTop: 3 } }),
+          h('div', null,
+            h('div', { style: { fontSize: 12.5, color: C.text } }, '不钉死，自动找最近在用的那个对话'),
+            h('div', { style: { fontSize: 11.5, color: C.text3 } }, '最省事；但你有多个对话同时开着时，可能叫错对象'))))
+        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '8px 0', cursor: 'pointer' } },
+          h('input', { type: 'radio', name: 'dy-sess', checked: !!sessionId, onChange: () => { if (!sessionId && sessions && sessions.length) setSessionId(sessions[0].id) }, style: { marginTop: 3 } }),
+          h('div', null,
+            h('div', { style: { fontSize: 12.5, color: C.text } }, '就发给指定的那个对话'),
+            h('div', { style: { fontSize: 11.5, color: C.text3 } }, '多个对话时不叫错人（推荐）'))))
+        if (sessionId || (sessions && sessions.length)) {
+          body.push(h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 } },
+            h('select', {
+              value: sessionId, onChange: (e) => setSessionId(e.target.value),
+              style: Object.assign({}, ctlBase, { width: 320, fontSize: 12 }),
+            },
+              h('option', { value: '' }, '（不选：自动找最近在用的）'),
+              ...((sessions || []).slice().sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0)).slice(0, 25).map((s) => {
+                const nm = String(s.cwd || '').split(/[\\/]/).filter(Boolean).pop() || '（无文件夹）'
+                return h('option', { key: s.id, value: s.id }, nm + (s.blank ? '（空对话）' : '') + (s.live ? ' · 已打开' : ''))
+              })),
+            ),
+            btn(busy === 'list' ? '…' : '重新读列表', loadSessions, { disabled: !!busy })))
+        }
+        body.push(h('div', { style: { marginTop: 10 } }, btn(busy === 'session' ? '保存中…' : '就用这个', saveSession, { disabled: !!busy, primary: true })))
+        body.push(h(WizStatus, { state: status[1], text: msg[1] }))
+        body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 6 } },
+          (sessions ? '读到 ' + sessions.length + ' 个对话。' : '正在读对话列表…') + '判据：这个对话必须真实存在（列表里找不到就不让过）。'))
+      }
+      if (step === 2) {
+        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '20px' } },
+          '点下面按钮，插件会自己把浏览器切成有头（看得见的窗口）并打开抖音。你在窗口里扫码或输密码 —— 我们绝不代填。'))
+        body.push(h('div', { style: { marginTop: 10 } },
+          btn(busy === 'browser' ? '正在打开…' : '打开浏览器去登录', openBrowser, { disabled: !!busy, primary: true }),
+          btn(busy === 'login' ? '检测中…' : '我登录好了，检测', checkLogin, { disabled: !!busy })))
+        body.push(h(WizStatus, { state: status[2], text: msg[2] }))
+        body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 6 } },
+          '判据：能读到一条私信才算真登录（页面标题是当前会话对端昵称，不算；能读评论区也不算——只带 ttwid 就能读）。'))
+      }
+      if (step === 3) {
+        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '20px' } },
+          '这一步认清「插件现在登录的是哪个号」。点按钮，我们直接问抖音要本号资料。'))
+        body.push(h('div', { style: { marginTop: 10 } }, btn(busy === 'me' ? '识别中…' : '识别本号', identify, { disabled: !!busy, primary: true })))
+        if (me) {
+          body.push(h('div', { style: { marginTop: 10, padding: '10px 12px', border: '1px solid ' + C.line, borderRadius: 10, background: C.page } },
+            h('div', { style: { fontSize: 13, color: C.text } }, '你现在登录的是 ', h('b', null, me.nick || '（没读到昵称）')),
+            h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 3 } }, 'ID ' + String(me.uid || '').slice(0, 8) + '…' + (me.has_sec ? '（已拿到 sec_uid）' : '（没拿到 sec_uid）'))))
+          body.push(h('div', { style: { marginTop: 8 } }, btn('对，就是我', () => setStat(3, 'ok', '已确认：' + (me.nick || '')), { primary: true })))
+        }
+        body.push(h(WizStatus, { state: status[3], text: msg[3] }))
+        body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 6 } }, '判据：uid / 昵称 / sec_uid 三项齐全（sec_uid 缺了，第 4 步就只能按昵称放行）。'))
+      }
+      if (step === 4) {
+        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '20px' } },
+          '去抖音里点开「你跟主人那条私信会话」（停在会话列表不算），点开之后回来点下面按钮。'))
+        body.push(h('div', { style: { marginTop: 10 } }, btn(busy === 'claim' ? '读取中…' : '读取当前会话', claim, { disabled: !!busy, primary: true })))
+        if (owner) body.push(h('div', { style: { marginTop: 8, fontSize: 12.5, color: C.text } }, '已认领：', h('b', null, owner.nick || '对方')))
+        body.push(h(WizStatus, { state: status[4], text: msg[4] }))
+        body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 6 } },
+          '判据：对方的 ID 不能等于第 3 步的本号 ID（本号自己不能当主人）；同名但不同号会放行。'))
+      }
+      if (step === 5) {
+        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, marginBottom: 6 } }, '除了主人，别人的私信怎么处理？'))
+        ;[['owner', '只认主人', '别人发来的一律不回，也不提醒'], ['notify', '主人 + 陌生人只提醒', '陌生人的消息会告诉你，但不替它回'], ['reply', '谁的私信都能回', '包括陌生人（不推荐，容易被冒充）']].forEach(([v, t, d]) => {
+          body.push(h('label', { key: v, style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '7px 0', cursor: 'pointer' } },
+            h('input', { type: 'radio', name: 'dy-auth', checked: authority === v, onChange: () => setAuthority(v), style: { marginTop: 3 } }),
+            h('div', null, h('div', { style: { fontSize: 12.5, color: C.text } }, t), h('div', { style: { fontSize: 11.5, color: C.text3 } }, d))))
+        })
+        body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 4 } }, '（「指定好友也能回」需要白名单，这版还没做。换成第三档之前请想清楚：那是任何陌生人都能指挥它。）'))
+      }
+      if (step === 6) {
+        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, marginBottom: 6 } }, '勾上你想让它干的活。全都不勾也行，那它就只值守。'))
+        ;[['dm', '私信自动回', '主人发来消息，直接回'], ['work', '作品评论自动回', '你自己视频下面的评论'], ['others', '评论区自动回', '别人视频下有人回你']].forEach(([k, t, d]) => {
+          body.push(h('label', { key: k, style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '7px 0', cursor: 'pointer' } },
+            h('input', { type: 'checkbox', checked: !!tasks[k], onChange: (e) => setTasks((p) => ({ ...p, [k]: e.target.checked })), style: { marginTop: 3 } }),
+            h('div', null, h('div', { style: { fontSize: 12.5, color: C.text } }, t), h('div', { style: { fontSize: 11.5, color: C.text3 } }, d))))
+        })
+        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0', cursor: 'pointer' } },
+          h('input', { type: 'checkbox', checked: onlyDuty, onChange: (e) => setOnlyDuty(e.target.checked) }),
+          h('span', { style: { fontSize: 12, color: C.text2 } }, '只值守、不自动回复（我确认）')))
+        body.push(h(Row, { label: '回复多长' },
+          h('select', { value: replyMode, onChange: (e) => setReplyMode(e.target.value), style: Object.assign({}, ctlBase, { width: 160 }) },
+            h('option', { value: 'conclusion' }, '完整（可能好几段）'),
+            h('option', { value: 'brief' }, '精简（只发一句结论）'))))
+        body.push(h(Row, { label: '每小时最多几条', hint: '默认 30，防批量刷评' },
+          h('input', { type: 'number', min: 1, max: 200, value: perHour, onChange: (e) => setPerHour(e.target.value), style: Object.assign({}, ctlBase, { width: 90 }) })))
+      }
+      if (step === 7) {
+        const list = Array.isArray(checks) ? checks : []
+        const bad = list.filter((c) => !c.ok)
+        body.push(h('div', { style: { fontSize: 13, fontWeight: 600, color: bad.length ? '#c0392b' : '#1f9d55' } },
+          bad.length ? ('还有 ' + bad.length + ' 项没过') : '体检全绿，可以开始用了'))
+        list.forEach((c) => body.push(h('div', { key: c.key, style: { display: 'flex', justifyContent: 'space-between', gap: 10, padding: '6px 0', borderTop: '1px solid ' + C.line } },
+          h('div', null,
+            h('div', { style: { fontSize: 12.5, color: c.ok ? C.text : '#c0392b' } }, (c.ok ? '✓ ' : '✕ ') + c.name),
+            h('div', { style: { fontSize: 11.5, color: C.text3 } }, c.detail || '')),
+          c.ok ? null : btn('去修', () => { setStep(checkStep[c.key] || 2); setWarn('') }))))
+      }
+
+      const pct = Math.round((Math.min(step, 7) / 7) * 100)
+      const hint = step === 7 ? '' : (mustDo[step] ? '这一步不能跳过' : '可以稍后设置')
+      return h('div', { 'data-dy-panel': '1', 'data-dy-wizard': '1', style: { padding: '6px 0 16px' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
+          h('div', { style: { fontSize: 13.5, fontWeight: 600, color: C.text } },
+            step === 7 ? '第 7 / 7 步 · 体检' : ('第 ' + step + ' / 7 步 · ' + steps[step - 1])),
+          h('div', { style: { fontSize: 11.5, color: C.text3 } }, hint)),
+        h('div', { style: { height: 4, borderRadius: 999, background: C.line, overflow: 'hidden', marginBottom: 12 } },
+          h('div', { style: { width: pct + '%', height: '100%', background: C.brand, transition: 'width .2s ease' } })),
+        h('div', { style: { border: '1px solid ' + C.line, borderRadius: 12, background: C.card, padding: '14px 16px' } }, body),
+        warn ? h('div', { style: { fontSize: 12, color: '#c0392b', marginTop: 8 } }, warn) : null,
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', marginTop: 12 } },
+          h('div', null,
+            step > 1 && step <= 6 ? btn('上一步', prev, { disabled: !!busy }) : null,
+            step === 7 ? btn('返回设置', () => onDone()) : null),
+          h('div', null,
+            (step === 3 || step === 5 || step === 6) ? btn('稍后设置', () => { setStep(Math.min(6, step + 1)); setWarn('') }) : null,
+            step < 6 ? btn('下一步', next, { disabled: !canGo(step) || !!busy, primary: true }) : null,
+            step === 6 ? btn(busy === 'finish' ? '保存中…' : '完成，体检', finish, { disabled: !!busy, primary: true }) : null)),
+      )
+    }
+
     // 「钉死会话」选择器：列表来自 /api/douyin-watch/sessions（DSH 自己的会话列表数据）
     const shortCwd = (p) => {
       const s = String(p || '');
@@ -269,6 +524,8 @@ window.__ModuleLoader__.load({
 
     function Panel() {
       const [cfg, setCfg] = useState(null);
+      // 2026-11-15：首次引导。onboarded=false 会自动进向导；这个 state 只是给「重新引导」用
+      const [wizOpen, setWizOpen] = useState(false);
       const [rows, setRows] = useState(null);
       const [note, setNote] = useState('');
       const [status, setStatus] = useState(null);
@@ -557,6 +814,11 @@ window.__ModuleLoader__.load({
         }
       }
 
+      // 首次进来（或点「重新引导」）→ 直接给向导，不进常规设置
+      if (cfg && (cfg.onboarded === false || wizOpen)) {
+        return h(Wizard, { cfg, setCfg, onDone: () => { setWizOpen(false); load(); } });
+      }
+
       return h('div', { 'data-dy-panel': '1', style: { padding: '4px 0 16px' } },
 
         h('div', {
@@ -576,6 +838,13 @@ window.__ModuleLoader__.load({
               border: '1px solid ' + C.line, background: 'transparent', color: C.text2,
             },
           }, s.label)),
+          h('button', {
+            type: 'button', onClick: () => { setWizOpen(true) },
+            style: {
+              fontSize: 11.5, padding: '4px 9px', borderRadius: 999, cursor: 'pointer',
+              border: '1px solid ' + C.line, background: 'transparent', color: C.text3, flex: '0 0 auto',
+            },
+          }, '重新引导'),
         ),
 
         h('div', {
