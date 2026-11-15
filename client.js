@@ -224,15 +224,23 @@ window.__ModuleLoader__.load({
       }
       const openBrowser = () => {
         setBusy('browser'); setWarn('')
+        // 2026-11-15（主人实机反馈）：第 2 步**不能**开 /chat —— 没登录时那是空白骨架屏
+        //   （左边一路灰色占位条、右边空图标），根本没有登录入口，人没法扫码。
+        //   改成开首页（登录入口在右上角），并顺手试着把二维码弹出来（失败不影响主流程）。
+        //   跳 /chat 只发生在「我登录好了，检测」那一步：chat-read-once --force-chat 自己会导航过去。
         fetch('/api/douyin-watch/browser-mode', {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ mode: 'headed', goto: 'https://www.douyin.com/chat' }),
+          body: JSON.stringify({ mode: 'headed', goto: 'https://www.douyin.com/', clickLogin: true }),
         }).then((r) => r.json())
           .then((d) => {
             setBusy('')
-            setStat(2, status[2] === 'ok' ? 'ok' : 'idle', d && d.ok
-              ? '抖音窗口已弹出，请在那个窗口里自己扫码/输密码。登录好点右边「我登录好了，检测」——密码和验证码我们不代填。'
-              : ('打不开浏览器窗口：' + ((d && d.error) || '没拿到原因')))
+            if (!d || !d.ok) { setStat(2, 'fail', '打不开浏览器窗口：' + ((d && d.error) || '没拿到原因')); return }
+            const lp = d.login || {}
+            let hint
+            if (lp.clicked && lp.popupShown) hint = '抖音窗口已弹出，二维码已经点出来了，拿手机扫一下就行。'
+            else if (lp.clicked) hint = '抖音窗口已弹出，我点了首页右上角的「登录」；二维码要是没弹出来，自己再点一下那个按钮。'
+            else hint = '抖音窗口已弹出，停在首页（不是私信页——没登录时那里是空白骨架屏）。没自动点到「登录」' + (lp.why ? '（' + lp.why + '）' : '') + '，自己点右上角那个就行。'
+            setStat(2, status[2] === 'ok' ? 'ok' : 'idle', hint + '密码和验证码我们不代填；登录好后点右边「我登录好了，检测」。')
           })
           .catch(() => { setBusy(''); setStat(2, 'fail', '切有头失败：接口没回应') })
       }
@@ -333,7 +341,9 @@ window.__ModuleLoader__.load({
       }
       if (step === 2) {
         body.push(h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '20px' } },
-          '点下面按钮，插件会自己把浏览器切成有头（看得见的窗口）并打开抖音。你在窗口里扫码或输密码 —— 我们绝不代填。'))
+          '点下面按钮，插件会自己把浏览器切成有头（看得见的窗口）并打开抖音首页 —— 登录入口在那里（没登录时私信页是空白骨架屏，没有登录口）。你在窗口里扫码或输密码，我们绝不代填。'))
+        body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 4, lineHeight: '18px' } },
+          '登录好点右边「我登录好了，检测」—— 这时才会跳到私信页去读一条私信，读到才算真登录。'))
         body.push(h('div', { style: { marginTop: 10 } },
           btn(busy === 'browser' ? '正在打开…' : '打开浏览器去登录', openBrowser, { disabled: !!busy, primary: true }),
           btn(busy === 'login' ? '检测中…' : '我登录好了，检测', checkLogin, { disabled: !!busy })))

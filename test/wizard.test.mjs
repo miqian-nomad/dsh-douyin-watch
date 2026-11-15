@@ -57,3 +57,44 @@ test('向导用的都是主题变量（深浅色都不会花）', () => {
   assert.match(block, /border: '1px solid ' \+ C\.line/, '边框要用主题变量')
   assert.equal(/background: '#fff'/.test(block), false, '别写死白底')
 })
+
+// 2026-11-15 回归：第 2 步原先开的是 /chat —— 没登录时那是空白骨架屏（左灰条 + 空图标），
+//   没有任何登录入口，主人根本没法扫码。必须开首页，跳私信页的动作留到「检测」那一步。
+test('第 2 步「打开浏览器去登录」开的是首页，不是 /chat', () => {
+  const i = CLIENT.indexOf('const openBrowser = () =>')
+  assert.ok(i > 0, 'client.js 里找不到 openBrowser')
+  const block = CLIENT.slice(i, i + 1800)
+  const m = /body: JSON\.stringify\(\{ mode: '([a-z]+)', goto: '([^']+)'/.exec(block)
+  assert.ok(m, 'openBrowser 没带 goto')
+  assert.equal(m[1], 'headed', '第 2 步要切有头')
+  assert.equal(m[2], 'https://www.douyin.com/', '第 2 步必须开首页 —— /chat 未登录是空白骨架屏')
+  assert.match(block, /clickLogin: true/, '要顺手试着把登录二维码点出来（失败不影响主流程）')
+})
+
+test('跳私信页只发生在「我登录好了，检测」那一步', () => {
+  const i = SERVER.indexOf("pathname === '/api/douyin-watch/onboard/login-check'")
+  assert.ok(i > 0, '找不到 login-check 路由')
+  assert.match(SERVER.slice(i, i + 700), /--force-chat/, 'login-check 要靠 --force-chat 自己把页面导航到 /chat')
+})
+
+test('浏览器落地页三处一致：未引导→首页、向导第 2 步→首页、已引导→/chat', () => {
+  const MODE = readFileSync(join(ROOT, 'tools', 'browser-mode.mjs'), 'utf8')
+  assert.match(MODE, /readOnboarded\(\) \? 'https:\/\/www\.douyin\.com\/chat' : 'https:\/\/www\.douyin\.com\/'/, '落地页要按 onboarded 分岔')
+  // 例子里的 goto 只出现在向导里，且必须是首页（登录入口在首页）
+  const hardCoded = [...CLIENT.matchAll(/goto: '([^']+)'/g)].map((m) => m[1])
+  assert.deepEqual(hardCoded, ['https://www.douyin.com/'], "向导里不许再写死 /chat 当 goto")
+})
+
+test('「点不到登录」不许把整件事判失败（加分项要能安全降级）', () => {
+  const MODE = readFileSync(join(ROOT, 'tools', 'browser-mode.mjs'), 'utf8')
+  const i = MODE.indexOf('if (CLICK_LOGIN) {')
+  assert.ok(i > 0, '找不到 --click-login 的处理')
+  const block = MODE.slice(i, i + 2600)
+  assert.match(block, /try \{/, '点登录必须包在 try 里')
+  assert.match(block, /catch \(e\) \{\s*\n\s*loginPopup = \{ clicked: false/, '点不到就记一条原因，不抛错')
+  // loginPopup 只作为「报告数据」出现在 out 里，而那个 out 是 ok: true
+  const outs = [...MODE.matchAll(/out\(\{[\s\S]*?\n  \}\)/g)].map((m) => m[0])
+  const withPopup = outs.filter((o) => /loginPopup/.test(o))
+  assert.ok(withPopup.length > 0, 'loginPopup 应该出现在结果里')
+  for (const o of withPopup) assert.match(o, /ok: true/, 'loginPopup 不许影响 ok')
+})
