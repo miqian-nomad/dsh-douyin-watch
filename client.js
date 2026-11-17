@@ -658,8 +658,10 @@ window.__ModuleLoader__.load({
           options: [{ v: 'on', t: '要刷' }, { v: 'off', t: '不刷' }],
           hint: scrollOn ? '到时间自己去刷，挑几条值得的，刷完跟你讲' : '完全不刷（默认）',
         }))
-        if (scrollOn) {
-          body.push(h(Seg, {
+        // 2026-11-17：选「不刷」时下面这几项也显示出来（灰着、点不动），
+        //   不然这一步空得只剩一个开关，看着就像「内容太少」。
+        body.push(h('div', { style: scrollOn ? null : { opacity: 0.45, pointerEvents: 'none' } },
+          h(Seg, {
             label: '什么时候',
             value: scrollWindow,
             onChange: (v) => { setScrollWindow(v); setWinTouched(true); },
@@ -667,8 +669,8 @@ window.__ModuleLoader__.load({
             hint: scrollWindow === 'midnight' ? '中午 12–14 点，晚上 18 点到第二天 9 点'
               : scrollWindow === 'evening' ? '晚上 18 点到 23 点'
                 : '00:00 到 23:59，白天也刷（会占电脑）',
-          }))
-          body.push(h(Seg, {
+          }),
+          h(Seg, {
             label: '怎么摊开',
             value: scrollSpread,
             onChange: setScrollSpread,
@@ -676,8 +678,8 @@ window.__ModuleLoader__.load({
             hint: scrollSpread === 'burst'
               ? '到时间段开头，一口气把几条刷完'
               : '把条数摊在这段时间里，每段随机挑一个时刻（像人一样，不会挤在一起）',
-          }))
-          body.push(h(Seg, {
+          }),
+          h(Seg, {
             label: '每天几条',
             value: String(scrollPerDay || 5),
             onChange: (v) => setScrollPerDay(Number(v)),
@@ -687,22 +689,22 @@ window.__ModuleLoader__.load({
               (c) => c + ' 条',
             ),
             hint: '一天最多挑这么多条看',
-          }))
-          body.push(h(Seg, {
+          }),
+          h(Seg, {
             label: '刷完告诉我',
             value: deliverDm ? 'on' : 'off',
             onChange: (v) => setDeliverDm(v === 'on'),
             options: [{ v: 'on', t: '发私信' }, { v: 'off', t: '不用' }],
             hint: deliverDm ? '刷完把结果私信发给你' : '刷完不打扰你',
-          }))
-          body.push(h(Seg, {
+          }),
+          h(Seg, {
             label: '写日报',
             value: writeReport ? 'on' : 'off',
             onChange: (v) => setWriteReport(v === 'on'),
             options: [{ v: 'on', t: '要写' }, { v: 'off', t: '不写' }],
             hint: writeReport ? '每天存一份文本文件，记事本能打开' : '不生成文件（默认）',
-          }))
-        }
+          }),
+        ))
       }
       if (step === 8) {
         // 评论区单独一步，同样把该有的都摆出来（回哪些、多快、多少、多长）
