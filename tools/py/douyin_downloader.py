@@ -161,7 +161,13 @@ def _ensure_cn_deps(show_progress: bool = True) -> str:
         return ''
     try:
         if target.exists():
-            _drop(target)
+            # 不删：留着可能是用户自己装的残缺目录，改名备份，出问题还能找回来
+            backup = Path(str(target) + '.broken-' + time.strftime('%Y%m%d-%H%M%S'))
+            try:
+                os.replace(str(target), str(backup))
+                print(f'旧目录不完整，已改名备份：{backup.name}')
+            except Exception:
+                _drop(target)
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             os.replace(str(staging), str(target))          # 同盘：原子

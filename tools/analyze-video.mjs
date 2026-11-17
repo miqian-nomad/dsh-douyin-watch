@@ -54,10 +54,18 @@ const run = (cmd, args, timeoutMs) => new Promise((resolve) => {
  * 找不到就明确报错，别猜着跑
  */
 function scriptPath() {
+  // ① 环境变量优先：明确指定了就用它（老用户换过自定义脚本的不能静默失效）
+  const envSkill = String(process.env.DOUYIN_VIDEO_SKILL || '').trim()
+  if (envSkill) {
+    const p = join(envSkill, 'scripts', 'douyin_downloader.py')
+    if (existsSync(p)) return p
+    if (existsSync(join(envSkill, 'douyin_downloader.py'))) return join(envSkill, 'douyin_downloader.py')
+  }
+  // ② 插件自带（随 npm 包发布）
   const own = join(HERE, 'py', 'douyin_downloader.py')
   if (existsSync(own)) return own
+  // ③ 外面那套「抖音视频」技能（老布局）
   const cands = [
-    String(process.env.DOUYIN_VIDEO_SKILL || '').trim(),
     join(homedir(), '.agents', 'skills', 'douyin-video'),
     join(homedir(), '.dsh', 'skills', 'douyin-video'),
     join(depsRoot(), 'skills', 'douyin-video'),
