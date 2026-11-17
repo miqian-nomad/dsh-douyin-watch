@@ -170,6 +170,46 @@ window.__ModuleLoader__.load({
       cursor: 'pointer', whiteSpace: 'nowrap',
     };
 
+    // ── 分段条（2026-11-17 主人选定）────────────────────────────────────────
+    //   主人把别的选法全否了（一排小按钮 / 滑条 / 滑轨 / 整行打勾 / 聊天式 / 开关），
+    //   在一页真样本里挑了 B「分段条」：细长一根、选中的那段填色。
+    //   他的两条硬要求：
+    //     ① 标签统一四字，不许"一会儿一个字、一会儿两个字"；
+    //     ② 每一项都配一句人话解释（只提醒→改成「只看不回」这种，别让词自己猜）。
+    //   选中色用固定品牌蓝：主题变量在深色下是近白，白字会看不见。
+    const SEG_ACCENT = '#4d6bfe';
+    function Seg({ label, hint, value, options, onChange }) {
+      return h('div', { style: { padding: '9px 0' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 } },
+          h('div', { style: { fontSize: 13.5, color: C.text, flex: '0 0 auto' } }, label),
+          h('div', {
+            style: {
+              display: 'inline-flex', background: 'rgba(127,127,127,0.12)',
+              borderRadius: 10, padding: 3, gap: 2, flex: '0 0 auto',
+            },
+          },
+            ...options.map((o) => h('button', {
+              key: o.v, type: 'button', onClick: () => onChange(o.v),
+              style: {
+                minWidth: 86, padding: '5px 10px', borderRadius: 8, border: 'none',
+                fontSize: 12.5, fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap',
+                background: value === o.v ? SEG_ACCENT : 'transparent',
+                color: value === o.v ? '#fff' : C.text3,
+                fontWeight: value === o.v ? 600 : 400,
+                transition: 'background .15s ease, color .15s ease',
+              },
+            }, o.t))),
+        ),
+        hint ? h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 4, lineHeight: '18px' } }, hint) : null,
+      );
+    }
+
+    // 当前值不在几个档位里时（老配置，比如 20 秒 / 45 秒），把它补成一项，别把人家现有设置吃掉
+    const withCurrent = (opts, cur, labelOf) => {
+      const has = opts.some((o) => String(o.v) === String(cur));
+      return (has || cur === '' || cur == null) ? opts : opts.concat([{ v: String(cur), t: labelOf(cur) }]);
+    };
+
     // 2026-11-07：文本输入框要"失焦/回车才存"。
     //   为什么不能像数字框那样 onChange 直接 save：peer 一变后端就重绑哨兵，
     //   逐字保存 = 每敲一个字母停一次哨兵、再启一次（实测会一直空转）。
@@ -484,15 +524,22 @@ window.__ModuleLoader__.load({
 
         // 2026-11-17：原来的第 5 步「谁能命令它」并到这里 —— 认人和"别人怎么办"是同一件事的两半。
         body.push(h('div', { style: { marginTop: 14, paddingTop: 12, borderTop: '1px solid ' + C.line } },
-          h('div', { style: { fontSize: 12.5, color: C.text2, marginBottom: 6 } }, '除了主人，别人的私信怎么办？')))
-        ;[['owner', '只认主人', '别人发来的一律不回，也不提醒你'], ['notify', '主人 + 陌生人只提醒', '陌生人的消息会告诉你，但不替它回（推荐）'], ['reply', '谁的私信都能回', '包括陌生人（不推荐，容易被冒充）']].forEach(([v, t, d]) => {
-          body.push(h('label', { key: v, style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '7px 0', cursor: 'pointer' } },
-            h('input', { type: 'radio', name: 'dy-auth', checked: authority === v, onChange: () => setAuthority(v), style: { marginTop: 3 } }),
-            h('div', null, h('div', { style: { fontSize: 12.5, color: C.text } }, t), h('div', { style: { fontSize: 11.5, color: C.text3 } }, d))))
-        })
+          h(Seg, {
+            label: '别人的私信',
+            value: authority,
+            onChange: setAuthority,
+            options: [
+              { v: 'owner', t: '只认主人' },
+              { v: 'notify', t: '都只提醒' },
+              { v: 'reply', t: '谁都能回' },
+            ],
+            hint: authority === 'owner' ? '别人发来的：不回你，也不提醒你'
+              : authority === 'notify' ? '别人发来的：告诉你一声，但它不回'
+                : '别人发来的：陌生人也回（容易被冒充，不建议）',
+          })))
         if (authority === 'reply') {
-          body.push(h('div', { style: { fontSize: 11.5, color: T.warn, marginTop: 4, lineHeight: '18px' } },
-            '注意：选了这一档，任何陌生人都能指挥它。涉及账号、文件、命令的话它仍会先问你，但语气上分不出谁是主人。'))
+          body.push(h('div', { style: { fontSize: 11.5, color: T.warn, marginTop: 2, lineHeight: '18px' } },
+            '选了这一档，任何陌生人都能指挥它。涉及账号、文件、命令的话它仍会先问你，但分不出谁是主人。'))
         }
         body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 8, lineHeight: '18px' } },
           '它只盯这一条会话（' + (pre[4].ok ? '认领时已自动填好' : '认领后自动填') + '）：别人发给你的私信它看不到，也不会去翻。'))
@@ -526,92 +573,119 @@ window.__ModuleLoader__.load({
       if (step === 6) {
         // 2026-11-17（主人纠正）：这一步**只讲私信里面那些设置**，不许和刷视频、评论区混在一起。
         //   他原话：「谁告诉你说你把这些都放在第六部里面」「第六部是私信里面的那些设置」。
-        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '20px', marginBottom: 2 } },
-          '这一步只管私信：它在私信里收到东西之后怎么办。刷视频和评论区是下面两步，各管各的。'))
-        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '8px 0', cursor: 'pointer' } },
-          h('input', { type: 'checkbox', checked: dmOn, onChange: (e) => setDmOn(e.target.checked), style: { marginTop: 3 } }),
-          h('div', null,
-            h('div', { style: { fontSize: 12.5, color: C.text } }, '主人发来消息，直接回'),
-            h('div', { style: { fontSize: 11.5, color: C.text3 } }, '不勾 = 只提醒你，它不回'))))
+        //   控件用他挑的「分段条」（见 Seg），标签统一四字，每项配一句人话。
+        body.push(h(Seg, {
+          label: '主人消息',
+          value: dmOn ? 'on' : 'off',
+          onChange: (v) => setDmOn(v === 'on'),
+          options: [{ v: 'on', t: '看完就回' }, { v: 'off', t: '只看不回' }],
+          hint: dmOn ? '它直接答你' : '只提醒你，它不答',
+        }))
         if (dmOn) {
-          body.push(h(Row, { label: '回复多长' },
-            h('select', { value: replyMode, onChange: (e) => setReplyMode(e.target.value), style: Object.assign({}, ctlBase, { width: 160 }) },
-              h('option', { value: 'conclusion' }, '完整（可能好几段）'),
-              h('option', { value: 'brief' }, '精简（只发一句结论）'))))
+          body.push(h(Seg, {
+            label: '回复多长',
+            value: replyMode,
+            onChange: setReplyMode,
+            options: [{ v: 'conclusion', t: '回得完整' }, { v: 'brief', t: '只回结论' }],
+            hint: replyMode === 'brief' ? '只发结论那一句，细节留在 DSH' : '可能好几段，把话说全',
+          }))
         }
-        body.push(h(Row, {
-          label: '发来的图片、表情包',
-          hint: '「看懂再回」= 它先把图读一遍再答；「当没看见」= 只按文字回，省时间也不费流量。'
-            + '表情包那种没信息量的图，选「当没看见」更划算',
-        },
-          h('select', { value: imageMode, onChange: (e) => setImageMode(e.target.value), style: Object.assign({}, ctlBase, { width: 180 }) },
-            h('option', { value: 'read' }, '看懂再回（默认）'),
-            h('option', { value: 'skip' }, '当没看见'))))
-        body.push(h(Row, {
-          label: '你分享的视频',
-          hint: '「主动看」= 先转成文字加一张画面拼图，再跟你讲这条片子；「先当话题聊」= 只当话题接，你说了要看它才看',
-        },
-          h('select', { value: shareCardMode, onChange: (e) => setShareCardMode(e.target.value), style: Object.assign({}, ctlBase, { width: 180 }) },
-            h('option', { value: 'analyze' }, '主动看（默认）'),
-            h('option', { value: 'chat' }, '先当话题聊'))))
-        body.push(h(Row, { label: '多久看一次新消息', hint: '单位：秒。填太小费电脑，填太大收到提醒慢；框里这个数就是正在用的' },
-          h('input', {
-            type: 'number', min: 10, max: 3600, value: intervalSec,
-            onChange: (e) => setIntervalSec(Number(e.target.value)),
-            style: Object.assign({}, ctlBase, { width: 90, textAlign: 'right' }),
-          })))
+        body.push(h(Seg, {
+          label: '图片表情',
+          value: imageMode,
+          onChange: setImageMode,
+          options: [{ v: 'read', t: '看懂再回' }, { v: 'skip', t: '当没看见' }],
+          hint: imageMode === 'skip' ? '只按文字答，不读图（省时间也不费流量）' : '先把图看一遍再答',
+        }))
+        body.push(h(Seg, {
+          label: '分享视频',
+          value: shareCardMode,
+          onChange: setShareCardMode,
+          options: [{ v: 'analyze', t: '自己去看' }, { v: 'chat', t: '你叫才看' }],
+          hint: shareCardMode === 'chat' ? '只当话题接着聊，你说要看才看' : '转成文字和画面，再跟你讲这条片子',
+        }))
+        body.push(h(Seg, {
+          label: '查看频率',
+          value: String(intervalSec),
+          onChange: (v) => setIntervalSec(Number(v)),
+          options: withCurrent(
+            [{ v: '20', t: '20 秒' }, { v: '30', t: '30 秒' }, { v: '60', t: '60 秒' }],
+            String(intervalSec),
+            (c) => c + ' 秒',
+          ),
+          hint: intervalSec <= 20 ? '最及时，也最费电脑' : (intervalSec >= 60 ? '省电脑，提醒会慢一点' : '折中'),
+        }))
         body.push(h(WizStatus, { state: status[6], text: msg[6], dark }))
       }
       if (step === 7) {
         // 刷视频单独一步（主人：不能笼统混为一起）
-        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '20px', marginBottom: 2 } },
-          '它自己刷视频：到了时间会一条条看下去，挑几条值得的，刷完跟你讲。'))
-        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '8px 0', cursor: 'pointer' } },
-          h('input', { type: 'checkbox', checked: scrollOn, onChange: (e) => setScrollOn(e.target.checked), style: { marginTop: 3 } }),
-          h('div', null,
-            h('div', { style: { fontSize: 12.5, color: C.text } }, '让它自己刷视频'),
-            h('div', { style: { fontSize: 11.5, color: C.text3 } }, '默认不勾 —— 不勾就完全不刷'))))
+        body.push(h(Seg, {
+          label: '要不要刷',
+          value: scrollOn ? 'on' : 'off',
+          onChange: (v) => setScrollOn(v === 'on'),
+          options: [{ v: 'on', t: '要刷' }, { v: 'off', t: '不刷' }],
+          hint: scrollOn ? '到时间自己去刷，挑几条值得的，刷完跟你讲' : '完全不刷（默认）',
+        }))
         if (scrollOn) {
-          body.push(h(Row, { label: '每天最多刷几条', hint: '默认 5 条；填 0 等于不刷' },
-            h('input', {
-              type: 'number', min: 0, max: 30, value: scrollPerDay,
-              onChange: (e) => setScrollPerDay(Number(e.target.value)),
-              style: Object.assign({}, ctlBase, { width: 90, textAlign: 'right' }),
-            })))
-          body.push(h('div', { style: { fontSize: 11.5, color: C.text3, lineHeight: '18px', padding: '2px 0 6px' } },
-            '什么时候刷：先用现在配着的时间段。要改时间段、要不要发私信告诉你、要不要写日报，去设置页「自动刷视频」。'))
+          body.push(h(Seg, {
+            label: '每天几条',
+            value: String(scrollPerDay || 5),
+            onChange: (v) => setScrollPerDay(Number(v)),
+            options: withCurrent(
+              [{ v: '3', t: '3 条' }, { v: '5', t: '5 条' }, { v: '10', t: '10 条' }],
+              String(scrollPerDay || 5),
+              (c) => c + ' 条',
+            ),
+            hint: '一天最多挑这么多条看',
+          }))
+          body.push(h('div', { style: { fontSize: 11.5, color: C.text3, lineHeight: '18px', padding: '6px 0' } },
+            '什么时候刷先用现在配着的时间段。要改时间段、要不要私信告诉你、要不要写日报，去设置页「自动刷视频」。'))
         }
         body.push(h(WizStatus, { state: status[7], text: msg[7], dark }))
       }
       if (step === 8) {
         // 评论区单独一步
-        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '20px', marginBottom: 2 } },
-          '评论区是公开的：别人都看得见。这一步决定它在评论区回不回话。'))
-        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '7px 0', cursor: 'pointer' } },
-          h('input', { type: 'checkbox', checked: workOn, onChange: (e) => setWorkOn(e.target.checked), style: { marginTop: 3 } }),
-          h('div', null,
-            h('div', { style: { fontSize: 12.5, color: C.text } }, '你自己视频下面的评论'),
-            h('div', { style: { fontSize: 11.5, color: C.text3 } }, '有人在你作品下面留言，它去回'))))
-        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '7px 0', cursor: 'pointer' } },
-          h('input', { type: 'checkbox', checked: othersOn, onChange: (e) => setOthersOn(e.target.checked), style: { marginTop: 3 } }),
-          h('div', null,
-            h('div', { style: { fontSize: 12.5, color: C.text } }, '别人视频下面有人回你'),
-            h('div', { style: { fontSize: 11.5, color: C.text3 } }, '你去别人作品下评论，有人回你时它接话'))))
+        body.push(h(Seg, {
+          label: '作品评论',
+          value: workOn ? 'on' : 'off',
+          onChange: (v) => setWorkOn(v === 'on'),
+          options: [{ v: 'on', t: '要回' }, { v: 'off', t: '不回' }],
+          hint: workOn ? '有人在你作品下留言，它去回' : '不碰你自己作品下面的评论',
+        }))
+        body.push(h(Seg, {
+          label: '别人回你',
+          value: othersOn ? 'on' : 'off',
+          onChange: (v) => setOthersOn(v === 'on'),
+          options: [{ v: 'on', t: '要接' }, { v: 'off', t: '不接' }],
+          hint: othersOn ? '你在别人作品下评论、有人回你时，它接话' : '别人回你，它不接',
+        }))
         if (workOn || othersOn) {
-          body.push(h(Row, { label: '评论区每小时最多几条', hint: '默认 30。只管评论区，不管私信，防批量刷评' },
-            h('input', {
-              type: 'number', min: 1, max: 200, value: perHour,
-              onChange: (e) => setPerHour(e.target.value),
-              style: Object.assign({}, ctlBase, { width: 90, textAlign: 'right' }),
-            })))
-          body.push(h('div', { style: { fontSize: 11.5, color: C.text3, lineHeight: '18px', padding: '2px 0 6px' } },
-            '评论区的语气、禁用词、每天上限、字数上限，都在设置页「公开评论」和「评论区自动回」里改。'))
+          body.push(h(Seg, {
+            label: '频率上限',
+            value: String(perHour || 30),
+            onChange: (v) => setPerHour(Number(v)),
+            options: withCurrent(
+              [{ v: '30', t: '30 条' }, { v: '60', t: '60 条' }, { v: '100', t: '100 条' }],
+              String(perHour || 30),
+              (c) => c + ' 条',
+            ),
+            hint: '只管评论区，不管私信，防批量刷评',
+          }))
+          body.push(h('div', { style: { fontSize: 11.5, color: C.text3, lineHeight: '18px', padding: '6px 0' } },
+            '评论区的语气、禁用词、每天上限、字数上限，在设置页「公开评论」和「评论区自动回」里改。'))
         }
-        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', padding: '12px 0 2px', cursor: 'pointer', borderTop: '1px solid ' + C.line, marginTop: 10 } },
-          h('input', { type: 'checkbox', checked: onlyDuty, onChange: (e) => setOnlyDuty(e.target.checked) }),
-          h('div', null,
-            h('div', { style: { fontSize: 12.5, color: C.text } }, '什么都不干，只守着（我确认）'),
-            h('div', { style: { fontSize: 11.5, color: C.text3 } }, '上面一个都没勾就选这个：它只看新消息，不回话'))))
+        // 一个都没开时，给一条明确的"只守着"，代替以前那个勾选框
+        if (!dmOn && !workOn && !othersOn && !scrollOn) {
+          body.push(onlyDuty
+            ? h('div', { style: { fontSize: 12, color: T.ok, padding: '12px 0 2px', borderTop: '1px solid ' + C.line, marginTop: 10 } },
+                '已设成：只守着，不回话')
+            : h('div', { style: { padding: '12px 0 2px', borderTop: '1px solid ' + C.line, marginTop: 10 } },
+                h('div', { style: { fontSize: 12, color: C.text2, marginBottom: 6 } }, '上面全都不开 —— 它就只看新消息，不回话。'),
+                h('button', {
+                  type: 'button', onClick: () => setOnlyDuty(true),
+                  style: Object.assign({}, btnBase, { cursor: 'pointer' }),
+                }, '就这样，只守着')))
+        }
         body.push(h(WizStatus, { state: status[8], text: msg[8], dark }))
       }
       if (step === STEP_MAX) {

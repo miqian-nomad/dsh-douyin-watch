@@ -28,12 +28,15 @@ test('第 6 步只讲私信，刷视频和评论区各占一步', () => {
   assert.equal(/scrollOn|setScrollOn/.test(block6), false, '第 6 步里不许有刷视频的设置')
   assert.equal(/workOn|setWorkOn|othersOn|setOthersOn/.test(block6), false, '第 6 步里不许有评论区的设置')
   assert.equal(/commentPerHour|setPerHour/.test(block6), false, '评论区上限不该出现在第 6 步')
-  assert.match(block6, /主人发来消息，直接回/, '第 6 步要有「主人发来消息直接回」')
-  assert.match(block6, /发来的图片、表情包/, '第 6 步要有图片表情那一项')
-  assert.match(block6, /你分享的视频/, '第 6 步要有"分享的视频"那一项')
+  // 2026-11-17：控件换成主人挑的「分段条」，标签统一四字，每项都配一句人话
+  for (const lab of ['主人消息', '回复多长', '图片表情', '分享视频', '查看频率']) {
+    assert.ok(block6.indexOf("label: '" + lab + "'") > -1, '第 6 步缺一项：' + lab)
+  }
+  assert.match(block6, /h\(Seg,/, '第 6 步要用分段条，不是下拉框')
+  assert.equal(/<select|h\('select'/.test(block6), false, '第 6 步不许再用下拉框')
   const i8 = CLIENT.indexOf('if (step === 8) {', i7)
-  assert.match(CLIENT.slice(i7, i8), /让它自己刷视频/, '第 7 步应该是刷视频')
-  assert.match(CLIENT.slice(i8, CLIENT.indexOf('if (step === STEP_MAX) {', i8)), /你自己视频下面的评论/, '第 8 步应该是评论区')
+  assert.match(CLIENT.slice(i7, i8), /label: '要不要刷'/, '第 7 步应该是刷视频')
+  assert.match(CLIENT.slice(i8, CLIENT.indexOf('if (step === STEP_MAX) {', i8)), /label: '作品评论'/, '第 8 步应该是评论区')
 })
 
 // 2026-11-17：主人要求"性格定在所有怎么说话之前"；别人私信那档并进第 4 步，不再单独占一步。
@@ -45,7 +48,7 @@ test('性格排在"怎么回"之前，且「别人怎么办」不再单独占一
   assert.equal(steps.indexOf('谁能命令它'), -1, '「谁能命令它」应该并进第 4 步，不该再是一步')
   const i4 = CLIENT.indexOf('if (step === 4) {')
   const block4 = CLIENT.slice(i4, CLIENT.indexOf('if (step === 5) {', i4))
-  assert.match(block4, /除了主人，别人的私信怎么办/, '别人私信那三档要并到第 4 步里')
+  assert.match(block4, /label: '别人的私信'/, '别人私信那三档要并到第 4 步里（分段条）')
 })
 
 test('第 1/2/4 步不能跳过，其余可以稍后', () => {
@@ -133,11 +136,12 @@ test('「它的性格」可以跳过', () => {
   assert.match(CLIENT, /\[3, 5, 6, 7, 8\]\.includes\(step\)/, '第 5 步（性格）必须能「稍后设置」')
 })
 
-test('刷视频默认先不开；勾了才写，不勾就写 0 条', () => {
+test('刷视频默认先不开；不刷就不写条数', () => {
   const i = CLIENT.indexOf('if (step === 7) {')
   const block = CLIENT.slice(i, CLIENT.indexOf('if (step === 8) {', i))
-  assert.match(block, /checked: scrollOn/, '刷视频要有自己的勾')
-  assert.match(block, /默认不勾 —— 不勾就完全不刷/, '要写清默认不开')
+  assert.match(block, /label: '要不要刷'/, '刷视频要单独一项')
+  assert.match(block, /\{ v: 'off', t: '不刷' \}/, '要能选「不刷」')
+  assert.match(block, /完全不刷（默认）/, '要写清默认不开')
   const f = CLIENT.indexOf('const finish = () =>')
   const fb = CLIENT.slice(f, f + 1800)
   assert.match(fb, /autoScrollEnabled: !!scrollOn/, '完成时要写刷视频开关')
