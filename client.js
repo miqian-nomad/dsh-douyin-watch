@@ -252,11 +252,13 @@ window.__ModuleLoader__.load({
         3: { ok: !!(wSelf.stored && String(wSelf.uid || '').trim()), detail: wSelf.stored ? ('已记住：' + (wSelf.nick || '（没学到昵称）') + (wSelf.uid ? '（ID ' + String(wSelf.uid).slice(0, 8) + '…）' : '')) : '还没记住这个号是谁' },
         4: { ok: !!(wClaim && String(wClaim.sec_uid || '').trim()), detail: (wClaim && wClaim.sec_uid) ? ('已认领：' + (wClaim.nick || '对方')) : '还没认领主人' },
         5: { ok: !!(cfg && cfg.personaPreset), detail: (cfg && cfg.personaPreset) ? '已选好一套人设' : '没选（＝默认口气），可以先跳过' },
-        6: { ok: true, detail: '按你现在开着的活带出来了' },
+        6: { ok: true, detail: cfg.intervalSeconds ? ('现在每 ' + cfg.intervalSeconds + ' 秒看一次私信') : '按现在的私信设置带出来了' },
+        7: { ok: true, detail: cfg.autoScrollEnabled ? ('现在开着，每天最多 ' + (cfg.autoScrollPerDay || 0) + ' 条') : '现在没开刷视频' },
+        8: { ok: true, detail: (cfg.commentAutoReplyWork || cfg.commentAutoReplyOthers) ? ('现在开着，一小时最多 ' + (cfg.commentPerHour || 30) + ' 条') : '现在没开评论区自动回' },
       }
       const seedStatus = {}
       const seedMsg = {}
-      for (const n of [1, 2, 3, 4, 5, 6]) if (pre[n].ok) { seedStatus[n] = 'ok'; seedMsg[n] = pre[n].detail }
+      for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) if (pre[n].ok) { seedStatus[n] = 'ok'; seedMsg[n] = pre[n].detail }
       // 停在第一个"必须要、但还缺"的那一步；都齐了就从第 1 步开始看
       const firstMissing = [1, 2, 4].find((n) => !pre[n].ok) || 1
       const [step, setStep] = useState(firstMissing)
@@ -268,11 +270,17 @@ window.__ModuleLoader__.load({
       const [sessions, setSessions] = useState(null)
       const [sessionId, setSessionId] = useState(cfg.sessionId || '')
       const [authority, setAuthority] = useState(cfg.strangerPolicy === 'ignore' ? 'owner' : (cfg.strangerPolicy === 'reply' ? 'reply' : 'notify'))
-      const [tasks, setTasks] = useState({ dm: cfg.ownerAutoReply !== false, work: !!cfg.commentAutoReplyWork, others: !!cfg.commentAutoReplyOthers, scroll: !!cfg.autoScrollEnabled })
-      const [onlyDuty, setOnlyDuty] = useState(false)
+      const [dmOn, setDmOn] = useState(cfg.ownerAutoReply !== false)
       const [replyMode, setReplyMode] = useState(cfg.replyMode || 'conclusion')
-      const [perHour, setPerHour] = useState(cfg.commentPerHour || 30)
+      const [imageMode, setImageMode] = useState(cfg.imageMode || 'read')
+      const [shareCardMode, setShareCardMode] = useState(cfg.shareCardMode || 'analyze')
+      const [intervalSec, setIntervalSec] = useState(Number(cfg.intervalSeconds) || 30)
+      const [scrollOn, setScrollOn] = useState(!!cfg.autoScrollEnabled)
       const [scrollPerDay, setScrollPerDay] = useState(Number(cfg.autoScrollPerDay) || 0)
+      const [workOn, setWorkOn] = useState(!!cfg.commentAutoReplyWork)
+      const [othersOn, setOthersOn] = useState(!!cfg.commentAutoReplyOthers)
+      const [onlyDuty, setOnlyDuty] = useState(false)
+      const [perHour, setPerHour] = useState(cfg.commentPerHour || 30)
       const [personaPick, setPersonaPick] = useState(cfg.personaPreset || '')
       const [checks, setChecks] = useState(null)
       const [warn, setWarn] = useState('')
@@ -351,23 +359,25 @@ window.__ModuleLoader__.load({
         }).catch(() => { setBusy(''); setStat(4, 'fail', '认领失败：接口没回应') })
       }
       const finish = () => {
-        if (!tasks.dm && !tasks.work && !tasks.others && !tasks.scroll && !onlyDuty) {
-          setWarn('你一个活都没勾。如果只想让它守着、不回话，请勾下面那句「只值守、不自动回复」')
+        if (!dmOn && !workOn && !othersOn && !scrollOn && !onlyDuty) {
+          setWarn('你一个活都没开。如果只想让它守着、不回话，请勾「只值守、不自动回复」')
           return
         }
         setWarn(''); setBusy('finish')
         post('finish', {
-          ownerAutoReply: !!tasks.dm,
-          strangerPolicy: authority === 'owner' ? 'ignore' : (authority === 'notify' ? 'notify' : 'reply'),
-          commentAutoReply: !!(tasks.work || tasks.others),
-          commentAutoReplyWork: !!tasks.work,
-          commentAutoReplyOthers: !!tasks.others,
+          ownerAutoReply: !!dmOn,
           replyMode,
+          imageMode: imageMode === 'skip' ? 'skip' : 'read',
+          shareCardMode: shareCardMode === 'chat' ? 'chat' : 'analyze',
+          intervalSeconds: Math.max(10, Math.min(3600, Number(intervalSec) || 30)),
+          strangerPolicy: authority === 'owner' ? 'ignore' : (authority === 'notify' ? 'notify' : 'reply'),
+          commentAutoReply: !!(workOn || othersOn),
+          commentAutoReplyWork: !!workOn,
+          commentAutoReplyOthers: !!othersOn,
           commentPerHour: Math.max(1, Math.min(200, Number(perHour) || 30)),
-          // 2026-11-17：刷视频以前引导里问都没有，走完的用户不知道它会这个。
-          //   默认"先不开"（0 条）：引导里勾了才打开，免得刚配好它自己就开始刷。
-          autoScrollEnabled: !!tasks.scroll,
-          autoScrollPerDay: tasks.scroll ? Math.max(1, Math.min(30, Number(scrollPerDay) || 5)) : 0,
+          // 刷视频默认"先不开"（0 条）：勾了才打开，免得刚配好它自己就开始刷
+          autoScrollEnabled: !!scrollOn,
+          autoScrollPerDay: scrollOn ? Math.max(1, Math.min(30, Number(scrollPerDay) || 5)) : 0,
           // 性格：只有真选了一套才写，没选就保持原样（不覆盖主人已有的选择）
           ...(personaPick ? { personaPreset: personaPick } : {}),
         }).then((d) => {
@@ -377,14 +387,18 @@ window.__ModuleLoader__.load({
           .catch(() => { setBusy(''); setWarn('保存失败：接口没回应') })
       }
 
-      // 2026-11-17 重排：①「谁可以命令它」并进第 4 步（认人 + 别人怎么办本来就是一件事）；
-      //   ②空出来的第 5 步给「它的性格」——它一开口就用这套口气，得在谈"怎么回"之前定；
-      //   ③第 6 步改成勾选，勾了哪项才展开哪项，刷视频也在这里（以前引导里压根没提）。
-      const steps = ['认领会话', '登录抖音号', '确认本号', '认领主人', '它的性格', '让它干什么活', '体检']
-      const checkStep = { session: 1, page: 2, gate: 2, who: 4, 'comment-api': 6 }
+      // 2026-11-17 重排（主人定的顺序，一步一件事）：
+      //   ①「谁能命令它」并进第 4 步（认人 + 别人怎么办本来就是一件事）；
+      //   ②第 5 步空出来给「它的性格」——它一开口就用这套口气，得在谈"怎么回"之前定；
+      //   ③第 6 步只讲私信里面那些设置，不再和刷视频、评论区混在一起；
+      //   ④刷视频、评论区各占一步（主人原话：不能笼统地混为一起）。
+      const steps = ['认领会话', '登录抖音号', '确认本号', '认领主人', '它的性格', '私信怎么回', '刷视频', '评论区', '体检']
+      const STEP_MAX = steps.length
+      const LAST_ASK = STEP_MAX - 1        // 最后一个要填的步骤（填完就体检）
+      const checkStep = { session: 1, page: 2, gate: 2, who: 4, 'comment-api': 8 }
       const mustDo = { 1: true, 2: true, 4: true }
       const canGo = (n) => (mustDo[n] ? status[n] === 'ok' : true)
-      const next = () => { if (step < 6 && canGo(step)) { setStep(step + 1); setWarn('') } }
+      const next = () => { if (step < LAST_ASK && canGo(step)) { setStep(step + 1); setWarn('') } }
       const prev = () => { if (step > 1) { setStep(step - 1); setWarn('') } }
       // 向导页里也要有「重新引导」的入口（常驻、看得见）：清掉本页的检测状态，从第 1 步重来。
       //   只动界面状态，不写任何文件 —— 已经存好的配置 / self.json 不受影响。
@@ -510,55 +524,97 @@ window.__ModuleLoader__.load({
         body.push(h(WizStatus, { state: status[5], text: msg[5], dark }))
       }
       if (step === 6) {
-        // 2026-11-17：改成一件事一项，勾了才展开那一项 —— 以前三件事挤在一起勾，
-        //   下面那个"每小时最多几条"看着像私信也受它管，其实只管评论。
-        const sub = (...kids) => h('div', { style: { margin: '2px 0 10px 28px', paddingLeft: 10, borderLeft: '2px solid ' + C.line, display: 'flex', flexDirection: 'column', gap: 6 } }, ...kids)
-        const pick = (k, t, d) => h('label', { key: k, style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '7px 0', cursor: 'pointer' } },
-          h('input', { type: 'checkbox', checked: !!tasks[k], onChange: (e) => setTasks((p) => ({ ...p, [k]: e.target.checked })), style: { marginTop: 3 } }),
-          h('div', null, h('div', { style: { fontSize: 12.5, color: C.text } }, t), h('div', { style: { fontSize: 11.5, color: C.text3 } }, d)))
-
-        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, marginBottom: 4 } }, '勾上你想让它干的活。勾了哪项，下面才展开那一项。'))
-
-        body.push(pick('dm', '私信自动回', '主人发来消息，直接回'))
-        if (tasks.dm) {
-          body.push(sub(h(Row, { label: '回复多长' },
+        // 2026-11-17（主人纠正）：这一步**只讲私信里面那些设置**，不许和刷视频、评论区混在一起。
+        //   他原话：「谁告诉你说你把这些都放在第六部里面」「第六部是私信里面的那些设置」。
+        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '20px', marginBottom: 2 } },
+          '这一步只管私信：它在私信里收到东西之后怎么办。刷视频和评论区是下面两步，各管各的。'))
+        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '8px 0', cursor: 'pointer' } },
+          h('input', { type: 'checkbox', checked: dmOn, onChange: (e) => setDmOn(e.target.checked), style: { marginTop: 3 } }),
+          h('div', null,
+            h('div', { style: { fontSize: 12.5, color: C.text } }, '主人发来消息，直接回'),
+            h('div', { style: { fontSize: 11.5, color: C.text3 } }, '不勾 = 只提醒你，它不回'))))
+        if (dmOn) {
+          body.push(h(Row, { label: '回复多长' },
             h('select', { value: replyMode, onChange: (e) => setReplyMode(e.target.value), style: Object.assign({}, ctlBase, { width: 160 }) },
               h('option', { value: 'conclusion' }, '完整（可能好几段）'),
-              h('option', { value: 'brief' }, '精简（只发一句结论）')))))
+              h('option', { value: 'brief' }, '精简（只发一句结论）'))))
         }
-
-        body.push(pick('scroll', '刷视频', '按时间自己刷，挑几条看，刷完跟你讲'))
-        if (tasks.scroll) {
-          body.push(sub(
-            h(Row, { label: '每天最多刷几条', hint: '默认 5 条' },
-              h('input', {
-                type: 'number', min: 1, max: 30, value: scrollPerDay,
-                onChange: (e) => setScrollPerDay(Number(e.target.value)),
-                style: Object.assign({}, ctlBase, { width: 90 }),
-              })),
-            h('div', { style: { fontSize: 11.5, color: C.text3, lineHeight: '18px' } },
-              '什么时候刷，用现在配着的时间段；要改去设置页「自动刷视频」。'),
-          ))
+        body.push(h(Row, {
+          label: '发来的图片、表情包',
+          hint: '「看懂再回」= 它先把图读一遍再答；「当没看见」= 只按文字回，省时间也不费流量。'
+            + '表情包那种没信息量的图，选「当没看见」更划算',
+        },
+          h('select', { value: imageMode, onChange: (e) => setImageMode(e.target.value), style: Object.assign({}, ctlBase, { width: 180 }) },
+            h('option', { value: 'read' }, '看懂再回（默认）'),
+            h('option', { value: 'skip' }, '当没看见'))))
+        body.push(h(Row, {
+          label: '你分享的视频',
+          hint: '「主动看」= 先转成文字加一张画面拼图，再跟你讲这条片子；「先当话题聊」= 只当话题接，你说了要看它才看',
+        },
+          h('select', { value: shareCardMode, onChange: (e) => setShareCardMode(e.target.value), style: Object.assign({}, ctlBase, { width: 180 }) },
+            h('option', { value: 'analyze' }, '主动看（默认）'),
+            h('option', { value: 'chat' }, '先当话题聊'))))
+        body.push(h(Row, { label: '多久看一次新消息', hint: '单位：秒。填太小费电脑，填太大收到提醒慢；框里这个数就是正在用的' },
+          h('input', {
+            type: 'number', min: 10, max: 3600, value: intervalSec,
+            onChange: (e) => setIntervalSec(Number(e.target.value)),
+            style: Object.assign({}, ctlBase, { width: 90, textAlign: 'right' }),
+          })))
+        body.push(h(WizStatus, { state: status[6], text: msg[6], dark }))
+      }
+      if (step === 7) {
+        // 刷视频单独一步（主人：不能笼统混为一起）
+        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '20px', marginBottom: 2 } },
+          '它自己刷视频：到了时间会一条条看下去，挑几条值得的，刷完跟你讲。'))
+        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '8px 0', cursor: 'pointer' } },
+          h('input', { type: 'checkbox', checked: scrollOn, onChange: (e) => setScrollOn(e.target.checked), style: { marginTop: 3 } }),
+          h('div', null,
+            h('div', { style: { fontSize: 12.5, color: C.text } }, '让它自己刷视频'),
+            h('div', { style: { fontSize: 11.5, color: C.text3 } }, '默认不勾 —— 不勾就完全不刷'))))
+        if (scrollOn) {
+          body.push(h(Row, { label: '每天最多刷几条', hint: '默认 5 条；填 0 等于不刷' },
+            h('input', {
+              type: 'number', min: 0, max: 30, value: scrollPerDay,
+              onChange: (e) => setScrollPerDay(Number(e.target.value)),
+              style: Object.assign({}, ctlBase, { width: 90, textAlign: 'right' }),
+            })))
+          body.push(h('div', { style: { fontSize: 11.5, color: C.text3, lineHeight: '18px', padding: '2px 0 6px' } },
+            '什么时候刷：先用现在配着的时间段。要改时间段、要不要发私信告诉你、要不要写日报，去设置页「自动刷视频」。'))
         }
-
-        body.push(pick('work', '作品评论自动回', '你自己视频下面的评论'))
-        body.push(pick('others', '评论区自动回', '别人视频下有人回你'))
-        if (tasks.work || tasks.others) {
-          body.push(sub(h(Row, { label: '评论区每小时最多几条', hint: '默认 30，只管评论区，不管私信，防批量刷评' },
+        body.push(h(WizStatus, { state: status[7], text: msg[7], dark }))
+      }
+      if (step === 8) {
+        // 评论区单独一步
+        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '20px', marginBottom: 2 } },
+          '评论区是公开的：别人都看得见。这一步决定它在评论区回不回话。'))
+        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '7px 0', cursor: 'pointer' } },
+          h('input', { type: 'checkbox', checked: workOn, onChange: (e) => setWorkOn(e.target.checked), style: { marginTop: 3 } }),
+          h('div', null,
+            h('div', { style: { fontSize: 12.5, color: C.text } }, '你自己视频下面的评论'),
+            h('div', { style: { fontSize: 11.5, color: C.text3 } }, '有人在你作品下面留言，它去回'))))
+        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '7px 0', cursor: 'pointer' } },
+          h('input', { type: 'checkbox', checked: othersOn, onChange: (e) => setOthersOn(e.target.checked), style: { marginTop: 3 } }),
+          h('div', null,
+            h('div', { style: { fontSize: 12.5, color: C.text } }, '别人视频下面有人回你'),
+            h('div', { style: { fontSize: 11.5, color: C.text3 } }, '你去别人作品下评论，有人回你时它接话'))))
+        if (workOn || othersOn) {
+          body.push(h(Row, { label: '评论区每小时最多几条', hint: '默认 30。只管评论区，不管私信，防批量刷评' },
             h('input', {
               type: 'number', min: 1, max: 200, value: perHour,
               onChange: (e) => setPerHour(e.target.value),
-              style: Object.assign({}, ctlBase, { width: 90 }),
-            }))))
+              style: Object.assign({}, ctlBase, { width: 90, textAlign: 'right' }),
+            })))
+          body.push(h('div', { style: { fontSize: 11.5, color: C.text3, lineHeight: '18px', padding: '2px 0 6px' } },
+            '评论区的语气、禁用词、每天上限、字数上限，都在设置页「公开评论」和「评论区自动回」里改。'))
         }
-
-        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', padding: '10px 0 2px', cursor: 'pointer', borderTop: '1px solid ' + C.line, marginTop: 8 } },
+        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', padding: '12px 0 2px', cursor: 'pointer', borderTop: '1px solid ' + C.line, marginTop: 10 } },
           h('input', { type: 'checkbox', checked: onlyDuty, onChange: (e) => setOnlyDuty(e.target.checked) }),
           h('div', null,
             h('div', { style: { fontSize: 12.5, color: C.text } }, '什么都不干，只守着（我确认）'),
-            h('div', { style: { fontSize: 11.5, color: C.text3 } }, '一个都不勾就选这个：它只看新消息，不自动回'))))
+            h('div', { style: { fontSize: 11.5, color: C.text3 } }, '上面一个都没勾就选这个：它只看新消息，不回话'))))
+        body.push(h(WizStatus, { state: status[8], text: msg[8], dark }))
       }
-      if (step === 7) {
+      if (step === STEP_MAX) {
         const list = Array.isArray(checks) ? checks : []
         const bad = list.filter((c) => !c.ok)
         body.push(h('div', { style: { fontSize: 13, fontWeight: 600, color: bad.length ? T.danger : T.ok } },
@@ -585,12 +641,12 @@ window.__ModuleLoader__.load({
             '想重新走一遍这个引导：点页面上的「重新引导」。别点「清除本机记录」——那是删掉"这个号是谁"，删了它就认不出自己了。')))
       }
 
-      const pct = Math.round((Math.min(step, 7) / 7) * 100)
-      const hint = step === 7 ? '' : (mustDo[step] ? '这一步不能跳过' : '可以稍后设置')
+      const pct = Math.round((Math.min(step, STEP_MAX) / STEP_MAX) * 100)
+      const hint = step === STEP_MAX ? '' : (mustDo[step] ? '这一步不能跳过' : '可以稍后设置')
       return h('div', { 'data-dy-panel': '1', 'data-dy-wizard': '1', style: { padding: '6px 0 16px' } },
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
           h('div', { style: { fontSize: 13.5, fontWeight: 600, color: C.text } },
-            step === 7 ? '第 7 / 7 步 · 体检' : ('第 ' + step + ' / 7 步 · ' + steps[step - 1])),
+            '第 ' + step + ' / ' + STEP_MAX + ' 步 · ' + steps[step - 1]),
           h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
             h('div', { style: { fontSize: 11.5, color: C.text3 } }, hint),
             h('button', {
@@ -606,12 +662,13 @@ window.__ModuleLoader__.load({
         warn ? h('div', { style: { fontSize: 12, color: T.danger, marginTop: 8 } }, warn) : null,
         h('div', { style: { display: 'flex', justifyContent: 'space-between', marginTop: 12 } },
           h('div', null,
-            step > 1 && step <= 6 ? btn('上一步', prev, { disabled: !!busy }) : null,
-            step === 7 ? btn('返回设置', () => onDone()) : null),
+            step > 1 && step <= LAST_ASK ? btn('上一步', prev, { disabled: !!busy }) : null,
+            step === STEP_MAX ? btn('返回设置', () => onDone()) : null),
           h('div', null,
-            (step === 3 || step === 5 || step === 6) ? btn('稍后设置', () => { setStep(Math.min(6, step + 1)); setWarn('') }) : null,
-            step < 6 ? btn('下一步', next, { disabled: !canGo(step) || !!busy, primary: true }) : null,
-            step === 6 ? btn(busy === 'finish' ? '保存中…' : '完成，体检', finish, { disabled: !!busy, primary: true }) : null)),
+            // 3 确认本号 / 5 性格 / 6 私信 / 7 刷视频 / 8 评论区 都能先跳过
+            [3, 5, 6, 7, 8].includes(step) ? btn('稍后设置', () => { setStep(Math.min(LAST_ASK, step + 1)); setWarn('') }) : null,
+            step < LAST_ASK ? btn('下一步', next, { disabled: !canGo(step) || !!busy, primary: true }) : null,
+            step === LAST_ASK ? btn(busy === 'finish' ? '保存中…' : '完成，体检', finish, { disabled: !!busy, primary: true }) : null)),
       )
     }
 
@@ -1329,16 +1386,28 @@ window.__ModuleLoader__.load({
           h(Row, {
             label: '收到视频分享卡片',
             hint: '你私信里转一条视频给它时怎么办。'
-              + '「只当话题聊」= 它跟着聊，不下载、不转写，你说要分析才动手（默认）。'
-              + '「自动分析」= 每条都先转文字、抽画面拼图，再照内容回你。',
+              + '「主动看」= 先转文字、抽画面拼图，再照内容回你（默认）。'
+              + '「只当话题聊」= 它跟着聊，不下载、不转写，你说要看它才看。',
           },
             h('select', {
-              value: cfg.shareCardMode || 'chat',
+              value: cfg.shareCardMode || 'analyze',
               onChange: (e) => save({ shareCardMode: e.target.value }),
               style: Object.assign({}, ctlBase, { width: 220 }),
             }, [
-              h('option', { key: 'chat', value: 'chat' }, '只当话题聊（默认）'),
-              h('option', { key: 'analyze', value: 'analyze' }, '自动分析再看'),
+              h('option', { key: 'analyze', value: 'analyze' }, '主动看（默认）'),
+              h('option', { key: 'chat', value: 'chat' }, '只当话题聊'),
+            ])),
+          h(Row, {
+            label: '私信里发来的图片、表情包',
+            hint: '「看懂再回」= 先把图读一遍再答（默认）；「当没看见」= 只按文字回，省时间也省流量',
+          },
+            h('select', {
+              value: cfg.imageMode || 'read',
+              onChange: (e) => save({ imageMode: e.target.value }),
+              style: Object.assign({}, ctlBase, { width: 220 }),
+            }, [
+              h('option', { key: 'read', value: 'read' }, '看懂再回（默认）'),
+              h('option', { key: 'skip', value: 'skip' }, '当没看见'),
             ])),
         ),
         h(Card, { title: '人设', anchor: 'persona' },

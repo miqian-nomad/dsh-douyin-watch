@@ -120,8 +120,14 @@ const DEFAULTS = {
   // 代价是纯 CPU 满载：2 分钟的视频约多花 5 分钟。不依赖显卡，所以谁都跑得动。
   subtitleOcr: false,
   // 2026-11-17：主人转来视频分享卡片时怎么办。
-  //   'chat'（默认）= 只当话题聊，不下载、不转写；'analyze' = 每次都调 douyin_analyze 真去看内容再回。
-  shareCardMode: 'chat',
+  //   2026-11-17 主人拍板改成 'analyze'（默认主动看）——他的原话：「我分享给他视频为什么不看」。
+  //   之前默认 'chat'（只当话题聊）是我自己的设计理由（怕像交作业），不是他的要求，已推翻。
+  //   'chat' 仍然保留可切：只当话题聊，不下载、不转写。
+  shareCardMode: 'analyze',
+  // 2026-11-17：私信里发来的图片 / 表情包怎么处理。
+  //   'read'（默认）= 下载下来让 AI 看；'skip' = 当没看见，只按文字回（省时间、省流量）。
+  //   能力本来就有（一直悄悄在跑），只是以前没有开关、设置页也没写。
+  imageMode: 'read',
   // 2026-11-13：评论区接口定时体检（小时）。0 = 关掉；范围 1–72；不填默认 6
   probeHours: 6,
   // 2026-11-15：首次引导是否走完。老用户如果没有这个键但已经配好了身份，会被自动当作 true
@@ -431,7 +437,7 @@ export function apply(ctx, config) {
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
   // 2026-11-07：补上 peer / owner —— 这两个是「要盯的会话昵称」和「主人昵称」，
   //   以前根本不在白名单里，设置页就算发上来也会被写盘循环丢掉（issue #1 的根因）。
-  const TOGGLE_KEYS = ['enabled', 'peer', 'owner', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaPreset', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir', 'subtitleOcr', 'shareCardMode', 'probeHours', 'onboarded']
+  const TOGGLE_KEYS = ['enabled', 'peer', 'owner', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaPreset', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir', 'subtitleOcr', 'shareCardMode', 'imageMode', 'probeHours', 'onboarded']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -2867,14 +2873,19 @@ export function apply(ctx, config) {
           const legacyOwner = !claim && (!!(lastReadMeta && lastReadMeta.verified === true) || (Boolean(ownerNick) && peerNick === ownerNick))
           const fromOwner = claimedOwner || verifiedPage || legacyOwner
 
-          for (const m of theirs) {
-            if (m.img && !m.text) m.localPath = await fetchImage(m.img, m.sid)
-            else if (m.img && m.text) m.localPath = await fetchImage(m.img, m.sid)
+          // 2026-11-17：图片按设置决定要不要读。imageMode='skip' 时连下载都省掉，
+          //   唤醒消息里只留一句"发来一张图，按设置没看"——不然模型会以为对方什么都没发。
+          const imageMode = String(cfg.imageMode || 'read') === 'skip' ? 'skip' : 'read'
+          if (imageMode === 'read') {
+            for (const m of theirs) {
+              if (m.img) m.localPath = await fetchImage(m.img, m.sid)
+            }
           }
           const body = theirs.slice(0, cfg.maxWakeText).map((m) => {
             const bits = []
             if (m.text) bits.push(m.text.slice(0, 80))
             if (m.localPath) bits.push(`[图片] 已存到 ${m.localPath}（用 read_image 看这里）`)
+            else if (m.img && imageMode === 'skip') bits.push('[图片] 你设置成"当没看见"，所以没读这张图')
             else if (m.img) bits.push(`[图片] 有图但下载失败：${String(m.img).slice(0, 80)}`)
             else if (!m.text) bits.push('(非文字消息)')
             return '- ' + bits.join(' ')
@@ -2902,7 +2913,7 @@ export function apply(ctx, config) {
             //    现在只给链接，要不要分析由模型自己按对话判断。
             //    2026-11-17：这个行为做成开关 shareCardMode，默认仍是「只聊」；
             //    设成 analyze 就一直按老路子（每次先分析再回）。
-            const wantAnalyze = String(cfg.shareCardMode || 'chat') === 'analyze'
+            const wantAnalyze = String(cfg.shareCardMode || 'analyze') !== 'chat'
             cardLine = wantAnalyze
               ? `\n视频：${vurl}（按设置自动分析：先调 douyin_analyze 看文案和画面，再回。画面只读 contact_sheet.jpg）\n`
               : `\n视频：${vurl}（先当话题接，他明说要分析才调 douyin_analyze，画面只读 contact_sheet.jpg）\n`
