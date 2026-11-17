@@ -7,9 +7,10 @@
   视觉线: 取得视频 → FFmpeg 抽帧 → 产出帧图列表供视觉模型扫画面文字
 
 v3.2 相对 v3.1 的改动（都是为了让"新会话直接能用、不卡住"）：
-1. 自举：自动把 D:\\dsh-plugins\\_deps\\python 加进 sys.path；解释器版本不匹配时
+1. 自举：自动把「依赖根目录/python」加进 sys.path；解释器版本不匹配时
    自动 re-exec 到匹配的 3.11（无需宿主预设任何环境变量）。
-2. 模型预置：优先用 _deps\\models\\faster-whisper-small 本地目录（只读也能用），
+   依赖根目录的找法见 _default_deps_root()：环境变量 → 插件旁边的 _deps → ~/.dsh/deps。
+2. 模型预置：优先用「依赖根目录/models/faster-whisper-*」本地目录（只读也能用），
    免去每次下载 ~460MB；没有预置时才回落到 HF 下载，且 HF_HOME 自动选可写目录。
 3. DLL：cuBLAS/cuDNN 目录多路径探测（ctranslate2 包内、nvidia pip 包、CUDA_PATH、
    NVIDIA Toolkit v*，含 glob），不再假设恰好装在 PATH 里。
@@ -21,7 +22,7 @@ v3.2 相对 v3.1 的改动（都是为了让"新会话直接能用、不卡住"�
 7. 失败信息可执行化：把 yt-dlp 的 "Fresh cookies ... are needed" 等翻译成明确的三条出路。
 8. 控制台 UTF-8 修正，避免 Windows 下中文乱码/UnicodeEncodeError。
 
-环境要求：Python 3.11（脚本会自己找）、FFmpeg、_deps 里的依赖；GPU 可选。
+环境要求：Python 3.11（脚本会自己找）、FFmpeg、依赖根目录里的第三方包；GPU 可选。
 """
 
 from __future__ import annotations
@@ -44,10 +45,29 @@ from typing import Any, Dict, List, Optional
 # 0. 自举：依赖路径 / 解释器 / 模型缓存 / DLL（必须在第三方 import 之前）
 # ============================================================================
 
-_DEPS_ROOT = Path(os.environ.get('DOUYIN_DEPS_ROOT', r'D:\dsh-plugins\_deps'))
-# 别人机器上通常没有 D:\dsh-plugins\_deps —— 落到用户目录，别一上来就找不到依赖
-if not os.environ.get('DOUYIN_DEPS_ROOT') and not _DEPS_ROOT.is_dir():
-    _DEPS_ROOT = Path.home() / '.dsh' / 'deps'
+def _default_deps_root() -> Path:
+    """依赖根目录怎么找。
+
+    2026-11-17：不再写死本机绝对路径（公开包里不该出现 `D:\\某人的目录\\_deps`）。
+    顺序：
+      ① 环境变量 DOUYIN_DEPS_ROOT（宿主 / 老用户可以用它指到任何地方）
+      ② **插件旁边的 _deps**：插件装在 <plugins>/dsh-douyin-watch 时，这里就是 <plugins>/_deps
+         —— 和"依赖跟插件放一起"的机器布局一致，换台机器、换个盘符都成立
+      ③ ~/.dsh/deps（全新机器，什么都没有时的落脚点）
+    """
+    env = str(os.environ.get('DOUYIN_DEPS_ROOT') or '').strip()
+    if env:
+        return Path(env)
+    try:
+        sibling = Path(__file__).resolve().parents[2].parent / '_deps'
+        if sibling.is_dir():
+            return sibling
+    except Exception:
+        pass
+    return Path.home() / '.dsh' / 'deps'
+
+
+_DEPS_ROOT = _default_deps_root()
 _DEPS_PY = Path(os.environ.get('DOUYIN_DEPS_DIR', str(_DEPS_ROOT / 'python')))
 _SKILL_DIR = Path(__file__).resolve().parent
 _DEFAULT_MODEL = os.environ.get('DOUYIN_MODEL', 'small')
@@ -64,35 +84,103 @@ _CN_PUNC = os.environ.get('DOUYIN_CN_PUNC_MODEL',
                           'damo/punc_ct-transformer_zh-cn-common-vocab272727-onnx')
 
 
+def _cn_asr_ok_in(d) -> bool:
+    """这个目录里是不是**一套完整的** funasr_onnx。
+
+    2026-11-17：以前只看 `funasr_onnx` 目录在不在。pip 装到一半被打断（超时 / 断网 / 进程被杀）
+    也会留下这个目录，于是被判成"已装"——之后每次 import 都失败，而且再也不会重装，
+    用户只能自己去删目录。现在要求「包目录 + 它自己的 dist-info」都在。
+    """
+    try:
+        p = Path(d)
+        if not (p / 'funasr_onnx' / '__init__.py').is_file():
+            return False
+        return bool(list(p.glob('funasr_onnx-*.dist-info')) or list(p.glob('funasr-onnx-*.dist-info')))
+    except Exception:
+        return False
+
+
 def _cn_asr_ready() -> str:
-    """返回能找到 funasr_onnx 的目录；找不到返回空串。"""
+    """返回能找到**完整** funasr_onnx 的目录；找不到返回空串。"""
     for d in (_CN_ASR_DIR, str(_DEPS_PY)):
-        if d and (Path(d) / 'funasr_onnx').is_dir():
+        if d and _cn_asr_ok_in(d):
             return d
     return ''
 
 
 def _ensure_cn_deps(show_progress: bool = True) -> str:
-    """保证中文引擎装好；缺了就自己装一次（不要求用户预装、也不再靠 whisper 兜底）。"""
-    d = _cn_asr_ready()
-    if d:
-        return d
+    """保证中文引擎装好；缺了就自己装一次（不要求用户预装、也不再靠 whisper 兜底）。
+
+    2026-11-17 加固（三个理由）：
+      ① pip 没有超时 → 网络卡住会把整次分析拖到 8 分钟超时；
+      ② 直接往正式目录装 → 装一半被打断就留下"看着像装好"的残缺目录；
+      ③ 用户自己指定的目录不能乱删。
+    所以：装到 `<正式目录>.installing` 的暂存目录，**校验通过后**才替换正式目录
+    （同一块盘上的 rename 是原子的）；失败就整个删掉暂存目录，正式目录一个字节都不动。
+    """
+    ready = _cn_asr_ready()
+    if ready:
+        return ready
     if os.environ.get('DOUYIN_CN_NO_INSTALL') == '1':
         return ''
+
+    target = Path(_CN_ASR_DIR)
+    staging = Path(str(target) + '.installing')
+    custom = bool(str(os.environ.get('DOUYIN_CN_ASR_DIR') or '').strip())
+    if custom and target.exists():
+        # 用户自己指了目录、里面还有别的东西 → 绝不动它，只给可执行的提示
+        print(f'中文引擎不可用：{target} 里没有完整的 funasr_onnx。\n'
+              f'  手动装：pip install --target "{target}" funasr-onnx modelscope\n'
+              '  或者去掉 DOUYIN_CN_ASR_DIR，让插件自己装到默认目录。')
+        return ''
+
+    _drop(staging)
     if show_progress:
-        print('首次使用：正在安装中文转写引擎（funasr-onnx + modelscope，只装这一次）…')
-    Path(_CN_ASR_DIR).mkdir(parents=True, exist_ok=True)
+        print('首次使用：正在下载转写引擎（funasr-onnx + modelscope，约 500 MB，只下这一次，之后不再下载）…')
     try:
-        rc = subprocess.call([sys.executable, '-m', 'pip', 'install', '--target', str(_CN_ASR_DIR),
-                              '-q', 'funasr-onnx', 'modelscope',
-                              '-i', 'https://pypi.tuna.tsinghua.edu.cn/simple'])
+        rc = subprocess.call(
+            [sys.executable, '-m', 'pip', 'install', '--no-input', '--target', str(staging),
+             '-q', 'funasr-onnx', 'modelscope',
+             '-i', 'https://pypi.tuna.tsinghua.edu.cn/simple'],
+            timeout=420)
+    except subprocess.TimeoutExpired:
+        print('下载引擎超时（超过 7 分钟）—— 网络慢的话稍后再试一次，装好之后就不会再下了。')
+        _drop(staging)
+        return ''
     except Exception as e:  # noqa: BLE001
         print(f'安装失败：{e}')
+        _drop(staging)
         return ''
     if rc != 0:
-        print(f'安装失败（pip rc={rc}）')
+        print(f'安装失败（pip rc={rc}）—— 网络问题的话稍后再试一次。')
+        _drop(staging)
+        return ''
+    if not _cn_asr_ok_in(staging):
+        print('装完了但校验没通过（只装了一半），已清掉，稍后再试一次。')
+        _drop(staging)
+        return ''
+    try:
+        if target.exists():
+            _drop(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(str(staging), str(target))          # 同盘：原子
+        except Exception:
+            shutil.move(str(staging), str(target))         # 跨盘：退一步
+    except Exception as e:  # noqa: BLE001
+        print(f'安装成功但落地失败：{e}')
+        _drop(staging)
         return ''
     return _cn_asr_ready()
+
+
+def _drop(p: Path) -> None:
+    """删一个目录（只用于我们自己创建的暂存目录 / 已确定是残缺的正式目录）。"""
+    try:
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+    except Exception:
+        pass
 
 
 def _reconfigure_stdio() -> None:
@@ -483,8 +571,9 @@ def _align_frames_to_text(manifest: List[Dict[str, Any]],
 
 _OCR_SITE_CANDIDATES = [
     os.environ.get('RAPIDOCR_SITE', ''),
-    r'D:\dsh-plugins\_deps\py311-site',
-    str(Path(os.environ.get('DSH_DEPS', r'D:\dsh-plugins\_deps')) / 'py311-site'),
+    # 2026-11-17：不再写死本机绝对路径 —— 跟着「依赖根目录」走（见 _default_deps_root）
+    str(_DEPS_ROOT / 'py311-site'),
+    str(Path(os.environ.get('DSH_DEPS', str(_DEPS_ROOT))) / 'py311-site'),
 ]
 
 

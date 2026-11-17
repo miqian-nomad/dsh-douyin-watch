@@ -26,6 +26,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { homeDir } from '../lib/paths.mjs'
+import { depsPython, depsRoot } from '../lib/deps-root.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const argv = process.argv.slice(2)
@@ -46,8 +47,8 @@ const run = (cmd, args, timeoutMs) => new Promise((resolve) => {
   })
 })
 
-/**
- * 转写脚本：① 插件自带，随 npm 包一起发（别人装上就有）
+
+/** 转写脚本：① 插件自带，随 npm 包一起发（别人装上就有）
  *            ② 外面那套「抖音视频」技能（老用户兼容）
  *            ③ 环境变量指定
  * 找不到就明确报错，别猜着跑
@@ -59,7 +60,7 @@ function scriptPath() {
     String(process.env.DOUYIN_VIDEO_SKILL || '').trim(),
     join(homedir(), '.agents', 'skills', 'douyin-video'),
     join(homedir(), '.dsh', 'skills', 'douyin-video'),
-    'D:\\dsh-plugins\\_deps\\skills\\douyin-video',
+    join(depsRoot(), 'skills', 'douyin-video'),
   ].filter(Boolean)
   for (const d of cands) {
     const p = join(d, 'scripts', 'douyin_downloader.py')
@@ -68,11 +69,11 @@ function scriptPath() {
   return ''
 }
 
-/** Python：优先 _deps 里那个 3.11（技能自举也指向它），否则退回 PATH 上的 python */
+/** Python：优先依赖目录里那个 3.11（脚本自举也指向它），否则退回 DSH 自带 / PATH 上的 python */
 function pythonBin() {
   const cands = [
     String(process.env.DOUYIN_PYTHON || '').trim(),
-    'D:\\dsh-plugins\\_deps\\python311\\cpython-3.11-windows-x86_64-none\\python.exe',
+    depsPython('DOUYIN_PYTHON'),
     join(homedir(), '.dsh', 'dsh-runtimes', 'dsh-primary-runtime', 'dependencies', 'python', 'python.exe'),
   ].filter(Boolean)
   for (const p of cands) if (existsSync(p)) return p
@@ -124,6 +125,8 @@ try {
     process.exit(1)
   }
   const py = pythonBin()
+// 让 python 那边的「依赖根目录」和这里算的一致（它自己也会推，但别各算一遍）
+process.env.DOUYIN_DEPS_ROOT = depsRoot()
   const outDir = join(homeDir(), 'douyin_out', VIDEO_IN ? 'local' : AWEME)
   const pageUrl = `https://www.douyin.com/video/${AWEME}`
   // 2026-11-05：硬字幕以前靠视觉模型看联系表来"读"，实测会编字
@@ -158,16 +161,35 @@ try {
     process.exit(1)
   }
   const res = pickJSON(pr.stdout)
-  steps.asr = res
-    ? {
-      ok: true,
-      engine: res.asr_engine || res.asr_device || '',
-      language: res.language,
-      chars: String(res.text || '').length,
-      frames: res.frame_count,
-    }
-    : { ok: false }
-  if (res && res.subtitle_ocr) {
+  // 2026-11-17：转写脚本崩了 / 被超时打断时，stdout 里没有 JSON → res 为空。
+  //   以前这里没兜住，最后会在 Number(res.frame_count) 抛
+  //   「Cannot read properties of null (reading 'frame_count')」——真正的错误
+  //   （引擎没装好、pip 超时、Python 缺依赖）全在 stderr 里，被丢掉了。
+  if (!res) {
+    const tail = String(pr.stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(-4).join(' ')
+    const timedOut = !!(pr.err && (pr.err.killed || pr.err.code === 'ETIMEDOUT'
+      || /timeout|timed out|ETIMEDOUT/i.test(String(pr.err.message || ''))))
+    out({
+      ok: false,
+      aweme_id: AWEME,
+      steps,
+      exit: pr.err ? pr.err.code : undefined,
+      error: (timedOut
+        ? '转写脚本跑超时被打断了（8 分钟）。第一次用要联网下载转写引擎和模型，网慢就会超；'
+          + '过一会儿再试一次，装好之后就不用再下了。'
+        : '转写脚本没跑出结果（多半是转写引擎还没装好）。')
+        + (tail ? ' 细节：' + tail.slice(0, 300) : ' 这次没拿到细节输出。'),
+    })
+    process.exit(1)
+  }
+  steps.asr = {
+    ok: true,
+    engine: res.asr_engine || res.asr_device || '',
+    language: res.language,
+    chars: String(res.text || '').length,
+    frames: res.frame_count,
+  }
+  if (res.subtitle_ocr) {
     steps.ocr = {
       ok: !!res.subtitle_ocr.ok,
       segments: res.subtitle_ocr.segment_count ?? 0,
@@ -181,16 +203,8 @@ try {
   //   抖音上很多视频只有 BGM / 只有表情包字幕，whisper 转出来就是空字符串。
   //   以前 `!res.text` 直接判失败 —— 结果① 语义错（把"没人说话"报成"ASR 没出结果"），
   //   ② 已经抽好的帧和联系表全白扔（调用方拿不到 contact_sheet 路径）。
-  //   现在只要技能正常返回（res 存在），就算成功；正文为空只标 no_speech，
-  //   画面路线（联系表）照常可用。
-  if (!res) {
-    out({
-      ok: false, aweme_id: AWEME, steps,
-      error: pr.stderr.slice(-260) || 'ASR 没出结果（技能没有返回可解析的 JSON）',
-      exit: pr.err ? pr.err.code : undefined,
-    })
-    process.exit(1)
-  }
+  //   现在只要转写脚本正常返回，就算成功；正文为空只标 no_speech，画面路线照常可用。
+  //   （res 为空的情况上面已经提前 exit 了，这里不用再判一次。）
 
   const text = String(res.text || '')
   const frames = Number(res.frame_count) || 0

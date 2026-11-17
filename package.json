@@ -21,8 +21,11 @@
     "CHANGELOG.md",
     "locale/*.json",
     "icon.svg",
-    "lib",
-    "tools"
+    "lib/*.mjs",
+    "tools/*.mjs",
+    "tools/*.py",
+    "tools/py/*.py",
+    "tools/py/*.mjs"
   ],
   "dsh": {
     "bundle": {

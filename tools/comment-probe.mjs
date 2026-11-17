@@ -9,6 +9,7 @@
  *
  * 只读：只 GET comment/list，不点不写不发。
  */
+import { depsPython, signerScript } from '../lib/deps-root.mjs'
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -21,8 +22,8 @@ const argOf = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? (argv[i + 1
 
 const AWEME = String(argOf('--aweme', '')).trim()
 const COUNT = String(argOf('--count', '20'))
-const PY = process.env.DOUYIN_SIGN_PY || 'D:\\dsh-plugins\\_deps\\python311\\cpython-3.11.16-windows-x86_64-none\\python.exe'
-const SCRIPT = process.env.DOUYIN_PROBE_SCRIPT || 'D:\\dsh-plugins\\_deps\\scripts\\douyin-signer\\probe_get.py'
+const PY = depsPython('DOUYIN_SIGN_PY')
+const SCRIPT = process.env.DOUYIN_PROBE_SCRIPT || signerScript('probe_get.py')
 
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\n')
 

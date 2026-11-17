@@ -18,6 +18,7 @@
  *
  * 注意：这是**读**接口，不涉及发布；发布仍旧走 comment-api.mjs（带 reply/reply-to-reply）。
  */
+import { depsPython, signerScript } from '../lib/deps-root.mjs'
 import { openPage, sleep } from '../lib/chrome.mjs'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
@@ -40,8 +41,8 @@ if (!AWEME) { out({ ok: false, error: '缺 --aweme' }); process.exit(1) }
 
 // ── 签名直连优先（2026-10-28）：先自己算签名，直接 GET /comment/list/。
 //    成了一次浏览器都不用开（从"开浏览器+等页面"变成一秒内）；失败才走下面的页面路。
-const SIGN_PY = String(process.env.DOUYIN_SIGN_PY || 'D:\\dsh-plugins\\_deps\\python311\\cpython-3.11-windows-x86_64-none\\python.exe')
-const SIGN_SCRIPT = String(process.env.DOUYIN_SIGN_SCRIPT || 'D:\\dsh-plugins\\_deps\\scripts\\douyin-signer\\signed_get.py')
+const SIGN_PY = depsPython('DOUYIN_SIGN_PY')
+const SIGN_SCRIPT = String(process.env.DOUYIN_SIGN_SCRIPT || signerScript('signed_get.py'))
 
 function signedCommentList(aweme, max) {
   if (!existsSync(SIGN_SCRIPT) || !existsSync(SIGN_PY)) return null

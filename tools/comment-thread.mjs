@@ -22,6 +22,7 @@
  * ⚠️ 页面路需要页面静止十几秒；调用方（插件工具）会先 pauseWatcher()，否则哨兵
  *    每 30 秒把页面导航回 /chat，正在加载的评论区会被抽掉（2026-10-28 踩过）。
  */
+import { depsPython, signerScript } from '../lib/deps-root.mjs'
 import { openPage, sleep } from '../lib/chrome.mjs'
 import { writeFileSync, existsSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -247,8 +248,8 @@ try {
   //    a_bogus 自己算签名，直接 GET /comment/list/reply/，一条一两秒就回来。
   //    有它就不用再"点开界面等页面自己发请求"；没装/失败才往下走页面路。
   if (!API_ONLY) {
-    const SIGN_PY = String(process.env.DOUYIN_SIGN_PY || 'D:\\dsh-plugins\\_deps\\python311\\cpython-3.11-windows-x86_64-none\\python.exe')
-    const SIGN_SCRIPT = String(process.env.DOUYIN_SIGN_SCRIPT || 'D:\\dsh-plugins\\_deps\\scripts\\douyin-signer\\signed_get.py')
+    const SIGN_PY = depsPython('DOUYIN_SIGN_PY')
+    const SIGN_SCRIPT = String(process.env.DOUYIN_SIGN_SCRIPT || signerScript('signed_get.py'))
     if (existsSync(SIGN_SCRIPT) && existsSync(SIGN_PY)) {
       for (const cid of CIDS) {
         const query = `device_platform=webapp&aid=6383&channel=channel_pc_web&item_id=${AWEME}&comment_id=${cid}&cursor=0&count=${MAX}&item_type=0&app_name=aweme`

@@ -15,6 +15,7 @@
  *
  * 输出一行 JSON：{ ok, http, cid, reply_to, text, raw? , error? }
  */
+import { depsPython, signerScript } from '../lib/deps-root.mjs'
 import { readFileSync, existsSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { openPage, sleep } from '../lib/chrome.mjs'
@@ -310,8 +311,8 @@ try {
    */
   function verifyByText() {
     try {
-      const py = process.env.DOUYIN_SIGN_PY || 'D:\\dsh-plugins\\_deps\\python311\\cpython-3.11-windows-x86_64-none\\python.exe'
-      const script = process.env.DOUYIN_SIGN_SCRIPT || 'D:\\dsh-plugins\\_deps\\scripts\\douyin-signer\\signed_get.py'
+      const py = depsPython('DOUYIN_SIGN_PY')
+      const script = process.env.DOUYIN_SIGN_SCRIPT || signerScript('signed_get.py')
       if (!existsSync(py) || !existsSync(script)) return ''
       const norm = (s) => String(s || '').replace(/\s+/g, '').slice(0, 60)
       const want = norm(res.text || TEXT)

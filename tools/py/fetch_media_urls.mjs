@@ -21,7 +21,8 @@
 import { createRequire } from 'node:module';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
   + '(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36';
@@ -66,9 +67,16 @@ function writeResult(payload) {
 }
 
 function loadPlaywright() {
+  // 2026-11-17：不再写死本机绝对路径（公开包里不该出现）。
+  //   playwright-core 通常由同级的浏览器插件提供，所以按「插件旁边的目录」推：
+  //   本文件在 <plugins>/dsh-douyin-watch/tools/py/ 下 → <plugins>/dsh-browser-playwright
+  let siblingRoot = '';
+  try {
+    siblingRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'dsh-browser-playwright');
+  } catch { /* ignore */ }
   const roots = [
     process.env.DOUYIN_PLAYWRIGHT_ROOT,
-    'D:/dsh-plugins/dsh-browser-playwright',
+    siblingRoot,
   ].filter(Boolean);
   const errors = [];
   for (const r of roots) {
@@ -85,7 +93,7 @@ function loadPlaywright() {
   } catch (e) {
     errors.push(`local: ${e.message}`);
   }
-  throw new Error(`playwright-core 未找到（可设 DOUYIN_PLAYWRIGHT_ROOT 指向插件目录）: ${errors.join(' | ')}`);
+  throw new Error(`playwright-core 未找到（可设 DOUYIN_PLAYWRIGHT_ROOT 指向装了它的插件目录）: ${errors.join(' | ')}`);
 }
 
 async function launchContext(chromium, profileDir) {

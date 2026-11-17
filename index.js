@@ -55,6 +55,7 @@
  *      但看起来像"机器人装死"（2026-10-24 因此被骂过一次）。别在清理前后一分钟等回复。
  * ============================================================================
  */
+import { depsPyDir, signerScript } from './lib/deps-root.mjs'
 import { appendFileSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import * as zlib from 'node:zlib'
 import { execFile } from 'node:child_process'
@@ -482,8 +483,8 @@ export function apply(ctx, config) {
         //   ① 脚本：$DOUYIN_SIGN_SCRIPT 或 _deps\scripts\douyin-signer\signed_get.py
         //   ② 依赖：_deps\python 下的 curl_cffi + cryptography（缺了签名脚本会 ImportError）
         try {
-          const signScript = String(process.env.DOUYIN_SIGN_SCRIPT || 'D:\\dsh-plugins\\_deps\\scripts\\douyin-signer\\signed_get.py')
-          const pyRoot = String(process.env.DOUYIN_DEPS_PYTHON || 'D:\\dsh-plugins\\_deps\\python')
+          const signScript = String(process.env.DOUYIN_SIGN_SCRIPT || signerScript('signed_get.py'))
+          const pyRoot = String(process.env.DOUYIN_DEPS_PYTHON || depsPyDir())
           o.status.signed = existsSync(signScript)
           o.status.signedDeps = existsSync(join(pyRoot, 'curl_cffi')) && existsSync(join(pyRoot, 'cryptography'))
         } catch { o.status.signed = false; o.status.signedDeps = false }

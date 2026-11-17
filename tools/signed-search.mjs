@@ -9,6 +9,7 @@
  *   node tools/signed-search.mjs --keyword "#蓝色大肥鱼" [--count 10] [--offset 0]
  * 输出一行 JSON: { ok, keyword, n, items: [ {aweme_id, desc, author, digg, comment, create_time, share_url} ] }
  */
+import { depsPython, signerScript } from '../lib/deps-root.mjs'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 
@@ -22,8 +23,8 @@ const OFFSET = Math.max(0, Number(argOf('--offset', '0')) || 0)
 const out = (o) => { console.log(JSON.stringify(o, null, 1)); process.exitCode = o.ok ? 0 : 1 }
 if (!KEYWORD) { out({ ok: false, error: '缺 --keyword' }); process.exit(1) }
 
-const PY = String(process.env.DOUYIN_SIGN_PY || 'D:\\dsh-plugins\\_deps\\python311\\cpython-3.11-windows-x86_64-none\\python.exe')
-const SCRIPT = String(process.env.DOUYIN_SIGN_SCRIPT || 'D:\\dsh-plugins\\_deps\\scripts\\douyin-signer\\signed_get.py')
+const PY = depsPython('DOUYIN_SIGN_PY')
+const SCRIPT = String(process.env.DOUYIN_SIGN_SCRIPT || signerScript('signed_get.py'))
 if (!existsSync(SCRIPT) || !existsSync(PY)) { out({ ok: false, error: '签名脚本不存在（看 _deps\\scripts\\douyin-signer）' }); process.exit(1) }
 
 // 关键词要 URL 编码（# / 中文都要）
