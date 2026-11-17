@@ -121,8 +121,10 @@ try {
   //  但代价是纯 CPU 逐帧识别，一条 2 分钟的视频要多花约 5 分钟满载。
   //  插件是给别人用的，别人机器不一定扛得住 → 默认关，需要精确字幕时加 --ocr 才跑。
   const ocrArgs = argv.includes('--ocr') ? ['--subtitle-ocr'] : []
+  // 转写引擎：默认中文引擎（技能里那一套，纯 CPU、带标点）。--asr whisper 只在排障时用。
+  const asrArgs = argv.includes('--asr-whisper') ? ['--asr', 'whisper'] : []
   const pargs = VIDEO_IN
-    ? [join(sd, 'scripts', 'douyin_downloader.py'), '--video', VIDEO_IN, '--out-dir', outDir, '--json', ...ocrArgs]
+    ? [join(sd, 'scripts', 'douyin_downloader.py'), '--video', VIDEO_IN, '--out-dir', outDir, '--json', ...asrArgs, ...ocrArgs]
     : [
       join(sd, 'scripts', 'douyin_downloader.py'),
       '--link', pageUrl,
@@ -130,11 +132,20 @@ try {
       ...(media.audio ? ['--audio-url', media.audio] : []),
       '--out-dir', outDir,
       '--json',
+      ...asrArgs,
       ...ocrArgs,
     ]
   const pr = await run(py, pargs, 8 * 60 * 1000)
   const res = pickJSON(pr.stdout)
-  steps.asr = res ? { ok: true, language: res.language, chars: String(res.text || '').length, frames: res.frame_count } : { ok: false }
+  steps.asr = res
+    ? {
+      ok: true,
+      engine: res.asr_engine || res.asr_device || '',
+      language: res.language,
+      chars: String(res.text || '').length,
+      frames: res.frame_count,
+    }
+    : { ok: false }
   if (res && res.subtitle_ocr) {
     steps.ocr = {
       ok: !!res.subtitle_ocr.ok,

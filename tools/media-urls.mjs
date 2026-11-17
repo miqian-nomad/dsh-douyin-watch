@@ -37,6 +37,10 @@ if (!AWEME) { out({ ok: false, error: '缺 --aweme 或 --link（要含 /video/<i
 /** 按 mime_type 分类（CDP 兜底路用）；br 是码率档位 */
 const kindOf = (u) => {
   if (!/douyinvod\.com/i.test(u)) return ''
+  // ⚠️ 2026-11-17 修：抖音的音频流 URL 里 mime_type 也写成 video_mp4，
+  //   光看 mime 永远分不出音视频 → 兜底那一路拿不到 audio。只能先看路径。
+  if (/\/media-audio\//i.test(u)) return 'audio'
+  if (/\/media-video\//i.test(u)) return 'video'
   const mime = (/[?&]mime_type=([^&]+)/.exec(u) || [])[1] || ''
   if (mime.startsWith('video')) return 'video'
   if (mime.startsWith('audio')) return 'audio'
@@ -134,9 +138,15 @@ try {
       if (k && !found[k].includes(u)) found[k].push(u)
     })
     await c.send('Page.navigate', { url: `https://www.douyin.com/video/${AWEME}` })
+    // ⚠️ 2026-11-17 修：原来「看到第一条视频流就 break」，实测音频流要到十几秒才来，
+    //   结果视频下到了、音轨丢了 → ASR 0 字，还被误报成「没人声」。
+    //   现在要求：视频和音频都到才走；只有视频时再多等最多 10 秒（视频请求紧跟着就来音频）。
+    let vidAt = -1
     for (let i = 0; i < TIMEOUT * 2; i++) {
       await sleep(500)
-      if (found.video.length) break
+      if (found.video.length && vidAt < 0) vidAt = i
+      if (found.video.length && found.audio.length) break
+      if (vidAt >= 0 && i - vidAt >= 20) break
     }
     await sleep(1200)
     // 页面没自己播就催一下（不播放就没有媒体请求）
