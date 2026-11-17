@@ -23,11 +23,26 @@ test('默认摊开刷；能写进配置白名单', () => {
   assert.match(SRC, /TOGGLE_KEYS\s*=\s*\[[^\]]*'autoScrollSpread'/, '漏了 TOGGLE_KEYS')
 })
 
-test('时刻表：先定起点，再按 5~20 分钟随机排开', () => {
+test('时刻表：两套算法分开（开机一套，按时间段一套）', () => {
   assert.match(SRC, /function buildSlotTimes/, '缺时刻表生成')
-  assert.match(SRC, /function nextWindowStart/, '配了时段时要从时段里/下个时段开始')
+  assert.match(SRC, /function expandWindows/, '要能把时间段展开成区间（支持跨零点）')
   assert.match(SRC, /function dueSlot/, '缺"到点没有"的判断')
   assert.match(SRC, /function markSlotDone/, '刷完要把这一格标掉')
+})
+
+test('按时间段：段长 ÷ 条数 = 每格，每格随机取一个点（不套 5~20 分钟）', () => {
+  assert.match(SRC, /const g = left \/ k/, '要按剩余段长均分')
+  assert.match(SRC, /at\(i \* g \+ Math\.random\(\) \* g\)/, '每格内随机取一点')
+  assert.match(SRC, /const cap = Math\.max\(1, Math\.floor\(left \/ 60000\)\)/, '段装不下就今天少排，不硬塞')
+  const i = SRC.indexOf('// ── ② 按时间段')
+  assert.ok(i > 0, '找不到「按时间段」那一段')
+  const winBlock = SRC.slice(i, SRC.indexOf('const schedSig', i))
+  assert.equal(/5 \* 60000/.test(winBlock), false, '按时间段不许再套 5~20 分钟那条')
+})
+
+test('改完时段/条数，今天的表跟着重排', () => {
+  assert.match(SRC, /const schedSig = \(\) =>/, '要有配置签名')
+  assert.match(SRC, /s\.sig !== schedSig\(\)/, '签名变了就必须重排，不然改完今天照旧跑')
 })
 
 test('没到点就不刷（tick 里先查时刻表）', () => {

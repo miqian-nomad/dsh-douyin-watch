@@ -1842,71 +1842,115 @@ export function apply(ctx, config) {
   }
 
   // ── 2026-11-17：刷视频的"时刻表"（主人要求）────────────────────────────
-  //   以前：落在时间段里，每 60 秒看一次，凑够条数就一口气刷完 —— 5 条挤在同一刻，像脚本。
-  //   现在：先圈一段时间，再把 N 条摊开，每段里随机挑一个时刻，一天按点去刷。
-  //   例：18:00–23:00、5 条 → 18:47 / 19:26 / 20:05 / 21:38 / 22:51 各刷一条。
+  //   ⚠️ 两套算法**必须分开**（2026-11-17 主人当场骂：「套用了同样的算法」「上下已经给你固定了」）：
+  //     ① 开机自动刷：没有上下界 —— 开机后随机等 10~30 分钟起，之后每条随机隔 5~20 分钟。
+  //     ② 按时间段刷：上下界是用户给的 —— 段长 ÷ 条数 = 每格，每格随机取一个点，条条都在段内。
+  //        例：22:40–23:00、5 条 → 每格 4 分钟 → 22:42 / 22:45 / 22:50 / 22:54 / 22:58。
+  //        以前这里套了 ① 的「每条隔 5~20 分钟」，20 分钟的段里放不下 5 条，后 4 条全被甩到段外。
   function todayKeyLocal() { return new Date().toISOString().slice(0, 10) }
   const schedFile = () => join(HOME, 'pick-sched.json')
   function readSched() {
     try { const j = JSON.parse(readFileSync(schedFile(), 'utf8')); return (j && j.date) ? j : null } catch { return null }
   }
   function writeSched(s) { try { writeFileSync(schedFile(), JSON.stringify(s, null, 2)) } catch { /* 写不了不影响这一轮 */ } }
-  /** 配了时间段时：现在在段里就"再等 5~20 分钟"，不在就排到下个时段的开头 */
-  function nextWindowStart(wins) {
-    const toMin = (s) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : null }
-    const now = new Date()
-    const curMin = now.getHours() * 60 + now.getMinutes()
+
+  /** 把 'HH:MM-HH:MM' 展开成今天的毫秒区间（支持跨零点，跨到明天） */
+  function expandWindows(wins) {
     const base = new Date(); base.setHours(0, 0, 0, 0)
-    let best = null
+    const dayStart = base.getTime()
+    const toMin = (s) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : null }
+    const out = []
     for (const w of wins) {
       const p = String(w).split('-')
       const a = toMin(p[0]); const b = toMin(p[1])
       if (a == null || b == null) continue
-      const inside = (a <= b) ? (curMin >= a && curMin < b) : (curMin >= a || curMin < b)
-      let at
-      if (inside) at = Date.now() + (5 + Math.random() * 15) * 60000
-      else {
-        const startMin = (curMin >= a) ? a + 24 * 60 : a
-        at = base.getTime() + startMin * 60000 + Math.random() * 5 * 60000
-      }
-      if (best == null || at < best) best = at
+      const s = dayStart + a * 60000
+      let e = dayStart + b * 60000
+      if (e <= s) e += 24 * 3600 * 1000     // 跨零点：18:00-09:00 这种
+      out.push({ s, e })
     }
-    return best
+    return out.filter((x) => x.e > x.s).sort((x, y) => x.s - y.s)
   }
 
   /**
-   * 今天的时刻表（2026-11-17 主人拍板的规则）：
-   *   ① 上限：一天最多刷几条（用户自己填）—— 生成几条就几条，刷满就停。
-   *   ② 起点：没配时段 = 开机后随机等 10~30 分钟；配了时段 = 时段里/下个时段的开头。
-   *   ③ 间隔：每条之间随机 5~20 分钟（下限 5 分钟，上限 20 分钟，中间每次重抽）。
-   *   ④ 条数多就自然摊更久：30 条 ≈ 3~10 小时，不会被压成每 2 分钟一条。
-   *   ⑤ 'burst'（一次刷完）= 紧接着连刷，不隔。
+   * 今天的时刻表。上限一律是"一天最多刷几条"（用户填的）。
+   *   ① 开机自动刷：没有上下界 —— 起点 = 开机后随机等 10~30 分钟；间隔 = 每条随机 5~20 分钟。
+   *   ② 按时间段刷：上下界已经定了 —— 剩余段长 ÷ 条数 = 每格，每格随机取一个点。
+   *      段已经过去一半也从现在起按剩余时间均分；剩的时间连 1 分钟一条都放不下，就今天少排几条。
+   *   ③ 'burst'（一次刷完）= 全压在第一个还在的段的开头，每条隔 1~2 分钟。
    */
   function buildSlotTimes(perDay) {
     const n = Math.max(1, perDay)
-    // 2026-11-17：只有选了「按时间段刷」才用时段；「开机就刷」一律当没配时段。
+    const burst = String(cfg.autoScrollSpread || 'spread') === 'burst'
+    // 只有选了「按时间段刷」才用时段；「开机就刷」一律当没配时段。
     const byWindow = String(cfg.autoScrollWhen || 'uptime') === 'window'
     const wins = byWindow ? (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).filter(Boolean) : []
-    const burst = String(cfg.autoScrollSpread || 'spread') === 'burst'
-    const MIN = 5 * 60000
-    const MAX = 20 * 60000
-    let t = wins.length ? nextWindowStart(wins) : null
-    if (t == null) t = Date.now() + (10 + Math.random() * 20) * 60000   // 跟着开机：先等 10~30 分钟
-    const out = [Math.round(t)]
-    for (let i = 1; i < n; i++) {
-      t += burst ? 2 * 60000 : (MIN + Math.random() * (MAX - MIN))
-      out.push(Math.round(t))
+    const segs = wins.length ? expandWindows(wins) : []
+    if (byWindow && wins.length && !segs.length) log('自动刷：时间段都解析不出来（' + wins.join(',') + '），先按开机就刷走')
+
+    if (!segs.length) {
+      // ── ① 开机自动刷：没有上下界，自己起头再按 5~20 分钟隔开 ──
+      const MIN = 5 * 60000
+      const MAX = 20 * 60000
+      let t = Date.now() + (10 + Math.random() * 20) * 60000   // 跟着开机：先等 10~30 分钟
+      const out = [Math.round(t)]
+      for (let i = 1; i < n; i++) {
+        t += burst ? 2 * 60000 : (MIN + Math.random() * (MAX - MIN))
+        out.push(Math.round(t))
+      }
+      return out
     }
+
+    // ── ② 按时间段：上下界是用户给的，只在这段里排 ──
+    const now = Date.now()
+    const live = segs.filter((s) => s.e > now)
+    const left = live.reduce((a, s) => a + (s.e - Math.max(s.s, now)), 0)
+    if (left <= 0) return []              // 今天的段全过去了，今天不刷
+    const at = (offset) => {              // 剩余时间轴上的偏移 → 真实时刻
+      let acc = 0
+      for (const s of live) {
+        const a = Math.max(s.s, now)
+        const len = s.e - a
+        if (offset < acc + len) return a + (offset - acc)
+        acc += len
+      }
+      return live[live.length - 1].e
+    }
+    if (burst) {
+      // 一次刷完：全压在第一个还在的段的开头，每条隔 1~2 分钟
+      let t = Math.max(live[0].s, now) + 60000
+      const out = []
+      for (let i = 0; i < n; i++) { out.push(Math.round(t)); t += 60000 + Math.random() * 60000 }
+      return out
+    }
+    // 摊开：段长 ÷ 条数 = 每格，每格随机取一个点
+    const cap = Math.max(1, Math.floor(left / 60000))   // 一格最少 1 分钟，否则不如连刷
+    const k = Math.min(n, cap)
+    if (k < n) log('自动刷：今天这段时间只够摊 ' + k + ' 条（你设了 ' + n + ' 条），今天先按 ' + k + ' 条排')
+    const g = left / k
+    const out = []
+    for (let i = 0; i < k; i++) out.push(Math.round(at(i * g + Math.random() * g)))
     return out
   }
+  /** 配置签名：改完时段/条数/方式，今天的表要跟着重排（不然改完今天还是照旧） */
+  const schedSig = () => [String(cfg.autoScrollWhen || 'uptime'),
+    (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).join(','),
+    String(cfg.autoScrollPerDay || 0),
+    String(cfg.autoScrollSpread || 'spread')].join('|')
   /** 到点该跑的那一条；没到点返回 null */
   function dueSlot(perDay) {
     let s = readSched()
-    if (!s || s.date !== todayKeyLocal() || !Array.isArray(s.slots) || !s.slots.length || s.slots.length !== Math.max(1, perDay)) {
-      s = { date: todayKeyLocal(), slots: buildSlotTimes(perDay).map((at) => ({ at, done: false })) }
+    // 2026-11-17：用「配置签名」判断要不要重排 —— 改完时段/条数/方式，今天的表立刻跟着变；
+    //   以前只比长度，改完时段今天照旧跑（主人当场撞上：22:40 改成 22:40-23:00，表还是老的）。
+    if (!s || s.date !== todayKeyLocal() || !Array.isArray(s.slots) || s.sig !== schedSig()) {
+      const slots = buildSlotTimes(perDay).map((at) => ({ at, done: false }))
+      s = { date: todayKeyLocal(), sig: schedSig(), slots }
       writeSched(s)
-      log('自动刷：今天的时刻表 ' + s.slots.map((x) => new Date(x.at).toTimeString().slice(0, 5)).join(' / '))
+      log('自动刷：今天的时刻表 ' + (slots.length
+        ? slots.map((x) => new Date(x.at).toTimeString().slice(0, 5)).join(' / ')
+        : '（今天这段时间排不下了，不刷）'))
     }
+    if (!s.slots.length) return null
     const now = Date.now()
     // 错过的那一格不补：超过 60 分钟还没刷的，直接作废（主人：关机就停，不补）
     let changed = false
