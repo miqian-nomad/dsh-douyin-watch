@@ -1,0 +1,24 @@
+# Python 编译缓存不进包（tools/py 里会生成）
+__pycache__/
+*.pyc
+*.pyo
+
+# 本地私有物（与 .gitignore 同步，防止 files 白名单把它们带进来）
+*.bak
+*.bak-*
+_backup/
+_tmp/
+douyin_cookie.txt
+*.cookie
+peer.json
+owner.json
+self.json
+watch-config.json
+watch-known.json
+watcher.lock
+runtime.json
+collector.json
+auto-scroll-state.json
+notice.json
+forward-pick.json
+*.log

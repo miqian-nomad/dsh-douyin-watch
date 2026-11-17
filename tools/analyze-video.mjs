@@ -46,15 +46,25 @@ const run = (cmd, args, timeoutMs) => new Promise((resolve) => {
   })
 })
 
-/** 技能目录：环境变量 > 常见位置；找不到就明确报错，别猜着跑 */
-function skillDir() {
+/**
+ * 转写脚本：① 插件自带，随 npm 包一起发（别人装上就有）
+ *            ② 外面那套「抖音视频」技能（老用户兼容）
+ *            ③ 环境变量指定
+ * 找不到就明确报错，别猜着跑
+ */
+function scriptPath() {
+  const own = join(HERE, 'py', 'douyin_downloader.py')
+  if (existsSync(own)) return own
   const cands = [
     String(process.env.DOUYIN_VIDEO_SKILL || '').trim(),
     join(homedir(), '.agents', 'skills', 'douyin-video'),
     join(homedir(), '.dsh', 'skills', 'douyin-video'),
     'D:\\dsh-plugins\\_deps\\skills\\douyin-video',
   ].filter(Boolean)
-  for (const d of cands) if (existsSync(join(d, 'scripts', 'douyin_downloader.py'))) return d
+  for (const d of cands) {
+    const p = join(d, 'scripts', 'douyin_downloader.py')
+    if (existsSync(p)) return p
+  }
   return ''
 }
 
@@ -107,10 +117,10 @@ try {
     }
   }
 
-  // ② 跑技能的下载+ASR+抽帧
-  const sd = skillDir()
-  if (!sd) {
-    out({ ok: false, aweme_id: AWEME, steps, error: '找不到 douyin-video 技能目录（可设 DOUYIN_VIDEO_SKILL 指过去）' })
+  // ② 跑转写脚本（下载 + ASR + 抽帧）
+  const pyScript = scriptPath()
+  if (!pyScript) {
+    out({ ok: false, aweme_id: AWEME, steps, error: '找不到转写脚本：插件内 tools/py 缺失，可设 DOUYIN_VIDEO_SKILL 指向技能目录' })
     process.exit(1)
   }
   const py = pythonBin()
@@ -124,9 +134,9 @@ try {
   // 转写引擎：默认中文引擎（技能里那一套，纯 CPU、带标点）。--asr whisper 只在排障时用。
   const asrArgs = argv.includes('--asr-whisper') ? ['--asr', 'whisper'] : []
   const pargs = VIDEO_IN
-    ? [join(sd, 'scripts', 'douyin_downloader.py'), '--video', VIDEO_IN, '--out-dir', outDir, '--json', ...asrArgs, ...ocrArgs]
+    ? [pyScript, '--video', VIDEO_IN, '--out-dir', outDir, '--json', ...asrArgs, ...ocrArgs]
     : [
-      join(sd, 'scripts', 'douyin_downloader.py'),
+      pyScript,
       '--link', pageUrl,
       '--url', media.video,
       ...(media.audio ? ['--audio-url', media.audio] : []),
