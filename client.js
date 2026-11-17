@@ -293,7 +293,7 @@ window.__ModuleLoader__.load({
         4: { ok: !!(wClaim && String(wClaim.sec_uid || '').trim()), detail: (wClaim && wClaim.sec_uid) ? ('已认领：' + (wClaim.nick || '对方')) : '还没认领主人' },
         5: { ok: !!(cfg && cfg.personaPreset), detail: (cfg && cfg.personaPreset) ? '已选好一套人设' : '没选（＝默认口气），可以先跳过' },
         6: { ok: true, detail: cfg.intervalSeconds ? ('现在每 ' + cfg.intervalSeconds + ' 秒看一次私信') : '按现在的私信设置带出来了' },
-        7: { ok: true, detail: cfg.autoScrollEnabled ? ('现在开着，每天最多 ' + (cfg.autoScrollPerDay || 0) + ' 条') : '现在没开刷视频' },
+        7: { ok: true, detail: cfg.autoScrollEnabled ? ('现在开着，每天最多 ' + (cfg.autoScrollPerDay || 0) + ' 条，' + (cfg.autoScrollWhen === 'window' ? '只在设定时段刷' : '跟着开机走')) : '现在没开刷视频' },
         8: { ok: true, detail: (cfg.commentAutoReplyWork || cfg.commentAutoReplyOthers) ? ('现在开着，一小时最多 ' + (cfg.commentPerHour || 30) + ' 条') : '现在没开评论区自动回' },
       }
       const seedStatus = {}
@@ -316,9 +316,11 @@ window.__ModuleLoader__.load({
       const [shareCardMode, setShareCardMode] = useState(cfg.shareCardMode || 'analyze')
       const [intervalSec, setIntervalSec] = useState(Number(cfg.intervalSeconds) || 30)
       const [scrollOn, setScrollOn] = useState(!!cfg.autoScrollEnabled)
-      const [scrollPerDay, setScrollPerDay] = useState(Number(cfg.autoScrollPerDay) || 0)
-      // 2026-11-17：这几条怎么摊在时间段里（摊开 = 每段随机一个时刻，像人；一次刷完 = 全压在开头）
-      const [scrollSpread, setScrollSpread] = useState(cfg.autoScrollSpread === 'burst' ? 'burst' : 'spread')
+      // 2026-11-17（主人定的四问顺序）：要不要刷 → 什么时候刷 → 刷完告不告诉你 → 写不写日报。
+      //   'uptime' = 开机就刷（跟着机器醒着走，不限钟点）；'window' = 只在设置页圈定的时段里刷。
+      //   「每天几条」「摊开/一次刷完」主人说别固定在引导里，留在设置页改，所以这里不问。
+      const [scrollWhen, setScrollWhen] = useState(cfg.autoScrollWhen === 'window' ? 'window' : 'uptime')
+      const winCount = (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).filter(Boolean).length
       // 刷视频那几个（2026-11-17 主人说"这一步内容太少"，把该有的都摆出来）
       const [deliverDm, setDeliverDm] = useState(cfg.autoScrollDeliverDm !== false)
       const [writeReport, setWriteReport] = useState(!!cfg.autoScrollWriteReport)
@@ -422,13 +424,14 @@ window.__ModuleLoader__.load({
           commentAutoReplyWork: !!workOn,
           commentAutoReplyOthers: !!othersOn,
           commentPerHour: Math.max(1, Math.min(200, Number(perHour) || 30)),
-          // 刷视频默认"先不开"（0 条）：勾了才打开，免得刚配好它自己就开始刷
+          // 刷视频默认"先不开"：勾了才打开，免得刚配好它自己就开始刷
           autoScrollEnabled: !!scrollOn,
-          autoScrollPerDay: scrollOn ? Math.max(1, Math.min(30, Number(scrollPerDay) || 5)) : 0,
-          // 时间段：引导页**不再碰**（2026-11-17 主人：引导里那三个预设跟设置页不是一套，且 5 条不必圈死钟点）。
-          //   要限时段，去设置页「自动刷视频」里调，那边能选到分、能加多段。
+          // 条数不在引导里问（主人：留在设置页改）。填过几就照原样留着；
+          //   一次都没填过（0）才给 5 —— 否则"开了却没条数"等于没开。
+          autoScrollPerDay: scrollOn ? (Number(cfg.autoScrollPerDay) > 0 ? Number(cfg.autoScrollPerDay) : 5) : 0,
+          // 时间段同理：引导里只问"开机就刷 / 按时间段"，具体几点到几点去设置页填。
           ...(scrollOn ? {
-            autoScrollSpread: scrollSpread === 'burst' ? 'burst' : 'spread',
+            autoScrollWhen: scrollWhen === 'window' ? 'window' : 'uptime',
             autoScrollDeliverDm: !!deliverDm,
             autoScrollWriteReport: !!writeReport,
           } : {}),
@@ -634,9 +637,10 @@ window.__ModuleLoader__.load({
       }
       if (step === 7) {
         // 刷视频单独一步（主人：不能笼统混为一起）。
-        // 2026-11-17 主人：「不如原来的，我说是内容是不是太少了，这一步」——
-        //   所以这一步把刷视频该有的都摆出来（时间、条数、要不要告诉你、要不要日报），
-        //   不再是孤零零一个开关。
+        // 2026-11-17 主人第二次纠正，四问的顺序是他定的：
+        //   ① 要刷不刷 → ② 开机就刷 / 按时间段刷 → ③ 刷完私信分享给主人 → ④ 写日报。
+        //   他还说「这些选项不应该固定，而是留在设置页里面改」——
+        //   所以「每天几条」「摊开/一次刷完」这两个具体档位搬回设置页，引导里不再问。
         body.push(h(Seg, {
           label: '要不要刷',
           value: scrollOn ? 'on' : 'off',
@@ -644,35 +648,19 @@ window.__ModuleLoader__.load({
           options: [{ v: 'on', t: '要刷' }, { v: 'off', t: '不刷' }],
           hint: scrollOn ? '到时间自己去刷，挑几条值得的，刷完跟你讲' : '完全不刷（默认）',
         }))
-        // 2026-11-17：选「不刷」时下面这几项也显示出来（灰着、点不动），
-        //   不然这一步空得只剩一个开关，看着就像「内容太少」。
-        // 2026-11-17 第二版：这里**不再问时间段**。
-        //   主人指出两件事：①引导里那三个时段是我自己编的预设，跟设置页那套（能选到分、能加多段）不是一回事，
-        //   等于两套规则；②一天才 5 条，圈死在几个钟点里纯属多余。
-        //   所以引导页不碰时间段，要限时段去设置页调；没设时段就摊在机器醒着的时间（见 index.js buildSlotTimes）。
+        // 选「不刷」时后三项也显示（灰着、点不动），不然这一步空得只剩一个开关
         body.push(h('div', { style: scrollOn ? null : { opacity: 0.45, pointerEvents: 'none' } },
           h(Seg, {
-            label: '怎么摊开',
-            value: scrollSpread,
-            onChange: setScrollSpread,
-            options: [{ v: 'spread', t: '摊开刷' }, { v: 'burst', t: '一次刷完' }],
-            hint: scrollSpread === 'burst'
-              ? '几条连着刷完，中间几乎不隔'
-              : '每条之间随机隔 5～20 分钟；条数多就自然摊更久',
+            label: '什么时候刷',
+            value: scrollWhen,
+            onChange: (v) => setScrollWhen(v === 'window' ? 'window' : 'uptime'),
+            options: [{ v: 'uptime', t: '开机就刷' }, { v: 'window', t: '按时间段' }],
+            hint: scrollWhen === 'window'
+              ? (winCount ? ('只在设置页定的 ' + winCount + ' 个时段里刷') : '还没定时段 —— 去设置页「自动刷视频」里填')
+              : '开机后随机等 10～30 分钟开始，之后每条随机隔 5～20 分钟',
           }),
           h(Seg, {
-            label: '每天几条',
-            value: String(scrollPerDay || 5),
-            onChange: (v) => setScrollPerDay(Number(v)),
-            options: withCurrent(
-              [{ v: '3', t: '3 条' }, { v: '5', t: '5 条' }, { v: '10', t: '10 条' }, { v: '20', t: '20 条' }],
-              String(scrollPerDay || 5),
-              (c) => c + ' 条',
-            ),
-            hint: '一天最多刷几条，刷到这个数就停',
-          }),
-          h(Seg, {
-            label: '刷完告诉我',
+            label: '刷完告诉你',
             value: deliverDm ? 'on' : 'off',
             onChange: (v) => setDeliverDm(v === 'on'),
             options: [{ v: 'on', t: '发私信' }, { v: 'off', t: '不用' }],
@@ -686,7 +674,7 @@ window.__ModuleLoader__.load({
             hint: writeReport ? '每天存一份文本文件，记事本能打开' : '不生成文件（默认）',
           }),
           h('div', { style: { fontSize: 11.5, color: C.text3, lineHeight: '18px', padding: '2px 0 4px' } },
-            '没设时段就跟着开机走：开机后随机等 10～30 分钟开始，之后每条之间随机隔 5～20 分钟。要限定只在某个时段，去设置页「自动刷视频」里调。'),
+            '一天刷几条、怎么摊开、具体几点到几点，都在设置页「自动刷视频」里改，这里只定大方向。'),
         ))
       }
       if (step === 8) {
@@ -1474,9 +1462,32 @@ window.__ModuleLoader__.load({
 
         h(Card, { title: '自动刷视频', anchor: 'autoscroll' },
           h(Row, { label: '开启自动刷视频', hint: '关掉就完全不跑' }, h(Switch, { checked: !!cfg.autoScrollEnabled, onChange: (v) => save({ autoScrollEnabled: v }) })),
+          // 2026-11-17：引导页只问大方向，具体档位都放回这里改（主人：「这些选项不应该固定，而是留在设置页里面改」）。
+          h(Row, { label: '什么时候刷', hint: '「开机就刷」= 跟着机器醒着走，不限定钟点；「按时间段」= 只在下面那几段里刷' },
+            h('select', {
+              value: cfg.autoScrollWhen === 'window' ? 'window' : 'uptime',
+              onChange: (e) => save({ autoScrollWhen: e.target.value }),
+              style: Object.assign({}, ctlBase, { width: 200 }),
+            },
+              h('option', { value: 'uptime' }, '开机就刷（默认）'),
+              h('option', { value: 'window' }, '按设定时间段'),
+            ),
+          ),
+          h(Row, { label: '怎么摊开', hint: '「摊开刷」= 每条之间随机隔 5～20 分钟（默认），条数多就自然摊更久；「一次刷完」= 几条连着刷完' },
+            h('select', {
+              value: cfg.autoScrollSpread === 'burst' ? 'burst' : 'spread',
+              onChange: (e) => save({ autoScrollSpread: e.target.value }),
+              style: Object.assign({}, ctlBase, { width: 200 }),
+            },
+              h('option', { value: 'spread' }, '摊开刷（默认）'),
+              h('option', { value: 'burst' }, '一次刷完'),
+            ),
+          ),
           h('div', { style: { padding: '10px 0 6px' } },
             h('div', { style: { fontSize: 13, color: C.text } }, '自动跑的时间段'),
             h('div', { style: { fontSize: 12, color: C.text3, marginTop: 2 } }, '时、分分别选；跨半夜也行，比如 18:30 到第二天 09:00'),
+            (cfg.autoScrollWhen === 'window' ? null : h('div', { style: { fontSize: 12, color: '#b26a00', marginTop: 4 } },
+              '现在是「开机就刷」，下面这几段不起作用。要按它来，把上面的「什么时候刷」改成「按设定时间段」。')),
             h('div', { style: { marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 } },
               ...rows.map((r, i) => h('div', { key: 'w' + i, style: { display: 'flex', alignItems: 'center', gap: 8 } },
                 timeSel(i, 'start'),

@@ -183,7 +183,11 @@ const DEFAULTS = {
   myWorks: '',
   // ── 自动刷视频（每项都有独立开关）──
   autoScrollEnabled: false, // 总开关：关掉就完全不跑
-  autoScrollWindows: ['12:00-14:00', '18:00-09:00'], // 自动跑的时间段，可增删
+  // 2026-11-17（主人定的问法顺序）：第一问要不要刷，第二问什么时候刷。
+  //   'uptime'（默认）= 跟着开机走 —— 开机后随机等 10~30 分钟开始，之后每条随机隔 5~20 分钟，不限钟点；
+  //   'window'       = 只在下面 autoScrollWindows 圈定的时段里刷。
+  autoScrollWhen: 'uptime',
+  autoScrollWindows: [], // 自动跑的时间段，可增删（只在 when='window' 时用；空 = 不限定）
   autoScrollPerDay: 5, // 每天最多挑几条（0 = 不跑）
   // 2026-11-17：这几条怎么摊在时间段里。'spread'（默认）= 均匀摊开、每段随机一个时刻；
   //   'burst' = 一次刷完（全压在时间段开头）。以前是"凑够就一口气刷完"，不像人。
@@ -375,6 +379,14 @@ export function apply(ctx, config) {
     }
   } catch { /* 读不到就按默认 */ }
   const cfg = { ...DEFAULTS, ...fileCfg, ...boot, cfgFile: cfgPath }
+  // 2026-11-17 兼容：老配置里没有 autoScrollWhen 这个键、却真填过时段 ——
+  //   按「按时间段」算，别让升级之后他设的时段悄悄失效。
+  //   只看 fileCfg（用户真写进文件的），不看默认值，免得把默认时段当成人配的。
+  if (!('autoScrollWhen' in fileCfg)
+    && Array.isArray(fileCfg.autoScrollWindows)
+    && fileCfg.autoScrollWindows.filter(Boolean).length) {
+    cfg.autoScrollWhen = 'window'
+  }
   // ⚠️ 2026-10-25 修的坑：子进程跑脚本时会带 `DOUYIN_HOME = cfg.home`，
   //    但**插件自己进程内**调 lib/（outbound-guard 写台账）走的是 `homeDir()` →
   //    只看 process.env.DOUYIN_HOME，没设就回落到 ~/.dsh/douyin-duty。
@@ -440,7 +452,7 @@ export function apply(ctx, config) {
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
   // 2026-11-07：补上 peer / owner —— 这两个是「要盯的会话昵称」和「主人昵称」，
   //   以前根本不在白名单里，设置页就算发上来也会被写盘循环丢掉（issue #1 的根因）。
-  const TOGGLE_KEYS = ['enabled', 'peer', 'owner', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaPreset', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollSpread', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir', 'subtitleOcr', 'shareCardMode', 'imageMode', 'probeHours', 'onboarded']
+  const TOGGLE_KEYS = ['enabled', 'peer', 'owner', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaPreset', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWhen', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollSpread', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir', 'subtitleOcr', 'shareCardMode', 'imageMode', 'probeHours', 'onboarded']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -1810,11 +1822,13 @@ export function apply(ctx, config) {
 
   /** 现在是不是落在某个自动刷时段里（支持跨零点） */
   function inAutoWindow() {
+    // 2026-11-17：选了「开机就刷」就不看钟点 —— 机器醒着就能刷，限制全交给时刻表。
+    if (String(cfg.autoScrollWhen || 'uptime') !== 'window') return true
     const now = new Date()
     const cur = now.getHours() * 60 + now.getMinutes()
     const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : NaN }
     const wins = Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []
-    if (!wins.length) return true     // 没配时段 = 不限（真正的限制交给时刻表：一天几条、摊开刷）
+    if (!wins.length) return true     // 选了按时段、却一个时段都没填 = 不限
     for (const w of wins) {
       const parts = String(w).split('-')
       if (parts.length !== 2) continue
@@ -1870,7 +1884,9 @@ export function apply(ctx, config) {
    */
   function buildSlotTimes(perDay) {
     const n = Math.max(1, perDay)
-    const wins = (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).filter(Boolean)
+    // 2026-11-17：只有选了「按时间段刷」才用时段；「开机就刷」一律当没配时段。
+    const byWindow = String(cfg.autoScrollWhen || 'uptime') === 'window'
+    const wins = byWindow ? (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).filter(Boolean) : []
     const burst = String(cfg.autoScrollSpread || 'spread') === 'burst'
     const MIN = 5 * 60000
     const MAX = 20 * 60000

@@ -145,7 +145,7 @@ test('刷视频默认先不开；不刷就不写条数', () => {
   const f = CLIENT.indexOf('const finish = () =>')
   const fb = CLIENT.slice(f, f + 1800)
   assert.match(fb, /autoScrollEnabled: !!scrollOn/, '完成时要写刷视频开关')
-  assert.match(fb, /autoScrollPerDay: scrollOn \? [^:]+: 0/, '没勾就写 0 条 = 先不开')
+  assert.match(fb, /autoScrollPerDay: scrollOn \?[^\n]*\) : 0,/, '没勾就写 0 条 = 先不开')
 })
 
 test('进引导页先认现状：只读不写，停在第一个缺的必填步', () => {

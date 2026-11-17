@@ -42,10 +42,28 @@ test('摊开模式每次只刷一条；一次刷完才允许整批', () => {
   assert.match(SRC, /const runLimit = burstRun \? Math\.max\(1, perDay - st\.count\) : 1/, '摊开模式应该每次 1 条')
 })
 
-test('第 7 步能选"怎么摊开"', () => {
-  assert.match(UI, /label: '怎么摊开'/, '引导页第 7 步要有这一项')
-  assert.match(UI, /t: '摊开刷' \}, \{ v: 'burst', t: '一次刷完'/, '两个选项都要在')
-  assert.match(UI, /autoScrollSpread: scrollSpread === 'burst' \? 'burst' : 'spread'/, '完成时要写进去')
+test('第 7 步只问四个大方向（顺序是主人定的），档位留在设置页', () => {
+  const i = UI.indexOf('if (step === 7) {')
+  const j = UI.indexOf('if (step === 8) {', i)
+  assert.ok(i > 0 && j > i, '找不到第 7 步')
+  const seg = UI.slice(i, j)
+  const labels = [...seg.matchAll(/label: '([^']+)'/g)].map((m) => m[1])
+  assert.deepEqual(labels, ['要不要刷', '什么时候刷', '刷完告诉你', '写日报'], '四项、顺序不能变')
+  assert.equal(/'怎么摊开'/.test(seg), false, '「怎么摊开」不该留在引导里')
+  assert.equal(/'每天几条'/.test(seg), false, '「每天几条」不该留在引导里')
+  assert.match(seg, /t: '开机就刷' \}, \{ v: 'window', t: '按时间段'/, '第二问是「开机就刷 / 按时间段」')
+})
+
+test('「什么时候刷」两档：默认开机就刷，后端认 autoScrollWhen', () => {
+  assert.match(SRC, /autoScrollWhen: 'uptime'/, '默认跟着开机走')
+  assert.match(SRC, /TOGGLE_KEYS\s*=\s*\[[^\]]*'autoScrollWhen'/, '漏了 TOGGLE_KEYS')
+  assert.match(SRC, /if \(String\(cfg\.autoScrollWhen \|\| 'uptime'\) !== 'window'\) return true/, '选开机就刷时不该被时段挡住')
+})
+
+test('档位都在设置页改：什么时候刷、怎么摊开、每天几条', () => {
+  assert.match(UI, /autoScrollWhen: e\.target\.value/, '设置页要能改「什么时候刷」')
+  assert.match(UI, /autoScrollSpread: e\.target\.value/, '设置页要能改「怎么摊开」')
+  assert.match(UI, /autoScrollPerDay: Number\(e\.target\.value\)/, '设置页要能填「每天几条」')
 })
 
 test('引导页不再自己编时间段（跟设置页只留一套）', () => {
