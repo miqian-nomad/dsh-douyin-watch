@@ -316,6 +316,23 @@ window.__ModuleLoader__.load({
       const [intervalSec, setIntervalSec] = useState(Number(cfg.intervalSeconds) || 30)
       const [scrollOn, setScrollOn] = useState(!!cfg.autoScrollEnabled)
       const [scrollPerDay, setScrollPerDay] = useState(Number(cfg.autoScrollPerDay) || 0)
+      // 刷视频那几个（2026-11-17 主人说"这一步内容太少"，把该有的都摆出来）
+      const WIN_PRESETS = {
+        midnight: ['12:00-14:00', '18:00-09:00'],
+        evening: ['18:00-23:00'],
+        allday: ['00:00-23:59'],
+      }
+      const [scrollWindow, setScrollWindow] = useState(() => {
+        const key = (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).join('|')
+        if (key === '18:00-23:00') return 'evening'
+        if (key === '00:00-23:59') return 'allday'
+        return 'midnight'
+      })
+      const [winTouched, setWinTouched] = useState(false)   // 只有主人动过才覆盖他原来的时间段
+      const [deliverDm, setDeliverDm] = useState(cfg.autoScrollDeliverDm !== false)
+      const [writeReport, setWriteReport] = useState(!!cfg.autoScrollWriteReport)
+      const [perDay, setPerDay] = useState(Number(cfg.commentPerDay) || 150)
+      const [maxChars, setMaxChars] = useState(Number(cfg.commentMaxChars) || 30)
       const [workOn, setWorkOn] = useState(!!cfg.commentAutoReplyWork)
       const [othersOn, setOthersOn] = useState(!!cfg.commentAutoReplyOthers)
       const [onlyDuty, setOnlyDuty] = useState(false)
@@ -417,6 +434,16 @@ window.__ModuleLoader__.load({
           // 刷视频默认"先不开"（0 条）：勾了才打开，免得刚配好它自己就开始刷
           autoScrollEnabled: !!scrollOn,
           autoScrollPerDay: scrollOn ? Math.max(1, Math.min(30, Number(scrollPerDay) || 5)) : 0,
+          // 时间段：主人动过才写，否则保留他原来的（别用预设把他的自定义覆盖掉）
+          ...(scrollOn ? {
+            autoScrollWindows: (winTouched || !(Array.isArray(cfg.autoScrollWindows) && cfg.autoScrollWindows.length))
+              ? (WIN_PRESETS[scrollWindow] || WIN_PRESETS.midnight)
+              : cfg.autoScrollWindows,
+            autoScrollDeliverDm: !!deliverDm,
+            autoScrollWriteReport: !!writeReport,
+          } : {}),
+          commentPerDay: Math.max(1, Math.min(500, Number(perDay) || 150)),
+          commentMaxChars: Math.max(5, Math.min(200, Number(maxChars) || 30)),
           // 性格：只有真选了一套才写，没选就保持原样（不覆盖主人已有的选择）
           ...(personaPick ? { personaPreset: personaPick } : {}),
         }).then((d) => {
@@ -616,7 +643,10 @@ window.__ModuleLoader__.load({
         }))
       }
       if (step === 7) {
-        // 刷视频单独一步（主人：不能笼统混为一起）
+        // 刷视频单独一步（主人：不能笼统混为一起）。
+        // 2026-11-17 主人：「不如原来的，我说是内容是不是太少了，这一步」——
+        //   所以这一步把刷视频该有的都摆出来（时间、条数、要不要告诉你、要不要日报），
+        //   不再是孤零零一个开关。
         body.push(h(Seg, {
           label: '要不要刷',
           value: scrollOn ? 'on' : 'off',
@@ -625,6 +655,15 @@ window.__ModuleLoader__.load({
           hint: scrollOn ? '到时间自己去刷，挑几条值得的，刷完跟你讲' : '完全不刷（默认）',
         }))
         if (scrollOn) {
+          body.push(h(Seg, {
+            label: '什么时候',
+            value: scrollWindow,
+            onChange: (v) => { setScrollWindow(v); setWinTouched(true); },
+            options: [{ v: 'midnight', t: '中午晚上' }, { v: 'evening', t: '只晚上' }, { v: 'allday', t: '全天都行' }],
+            hint: scrollWindow === 'midnight' ? '中午 12–14 点，晚上 18 点到第二天 9 点'
+              : scrollWindow === 'evening' ? '晚上 18 点到 23 点'
+                : '00:00 到 23:59，白天也刷（会占电脑）',
+          }))
           body.push(h(Seg, {
             label: '每天几条',
             value: String(scrollPerDay || 5),
@@ -636,12 +675,24 @@ window.__ModuleLoader__.load({
             ),
             hint: '一天最多挑这么多条看',
           }))
-          body.push(h('div', { style: { fontSize: 11.5, color: C.text3, lineHeight: '18px', padding: '6px 0' } },
-            '什么时候刷先用现在配着的时间段。要改时间段、要不要私信告诉你、要不要写日报，去设置页「自动刷视频」。'))
+          body.push(h(Seg, {
+            label: '刷完告诉我',
+            value: deliverDm ? 'on' : 'off',
+            onChange: (v) => setDeliverDm(v === 'on'),
+            options: [{ v: 'on', t: '发私信' }, { v: 'off', t: '不用' }],
+            hint: deliverDm ? '刷完把结果私信发给你' : '刷完不打扰你',
+          }))
+          body.push(h(Seg, {
+            label: '写日报',
+            value: writeReport ? 'on' : 'off',
+            onChange: (v) => setWriteReport(v === 'on'),
+            options: [{ v: 'on', t: '要写' }, { v: 'off', t: '不写' }],
+            hint: writeReport ? '每天存一份文本文件，记事本能打开' : '不生成文件（默认）',
+          }))
         }
       }
       if (step === 8) {
-        // 评论区单独一步
+        // 评论区单独一步，同样把该有的都摆出来（回哪些、多快、多少、多长）
         body.push(h(Seg, {
           label: '作品评论',
           value: workOn ? 'on' : 'off',
@@ -666,10 +717,32 @@ window.__ModuleLoader__.load({
               String(perHour || 30),
               (c) => c + ' 条',
             ),
-            hint: '只管评论区，不管私信，防批量刷评',
+            hint: '每小时最多回几条，只管评论区',
+          }))
+          body.push(h(Seg, {
+            label: '每天上限',
+            value: String(perDay || 150),
+            onChange: (v) => setPerDay(Number(v)),
+            options: withCurrent(
+              [{ v: '100', t: '100 条' }, { v: '150', t: '150 条' }, { v: '200', t: '200 条' }],
+              String(perDay || 150),
+              (c) => c + ' 条',
+            ),
+            hint: '一天最多回几条，防刷过头',
+          }))
+          body.push(h(Seg, {
+            label: '字数上限',
+            value: String(maxChars || 30),
+            onChange: (v) => setMaxChars(Number(v)),
+            options: withCurrent(
+              [{ v: '15', t: '15 字' }, { v: '30', t: '30 字' }, { v: '50', t: '50 字' }],
+              String(maxChars || 30),
+              (c) => c + ' 字',
+            ),
+            hint: '每条评论最多几个字',
           }))
           body.push(h('div', { style: { fontSize: 11.5, color: C.text3, lineHeight: '18px', padding: '6px 0' } },
-            '评论区的语气、禁用词、每天上限、字数上限，在设置页「公开评论」和「评论区自动回」里改。'))
+            '评论区的语气、禁用词、跳过哪些人，在设置页「公开评论」和「评论区自动回」里改。'))
         }
         // 一个都没开时，给一条明确的"只守着"，代替以前那个勾选框
         if (!dmOn && !workOn && !othersOn && !scrollOn) {
