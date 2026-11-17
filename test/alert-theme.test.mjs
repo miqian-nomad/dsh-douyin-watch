@@ -86,7 +86,6 @@ test('主题变了要重渲染（否则换主题后提示条颜色不会跟着�
   // 每个用到 TONE 的组件都得拿到 dark
   assert.match(CLIENT, /const dark = useThemeDark\(\);/, 'Panel 要取主题')
   assert.match(CLIENT, /sessionId: cfg\.sessionId, dark \}\)/, 'StatusCard 要拿到主题')
-  // 2026-11-17：Wizard 多了 runStatus / personas 两个入参，这里只钉"必须拿到 dark"
-  assert.match(CLIENT, /function Wizard\(\{ cfg, setCfg, onDone, dark[,]? ?/, 'Wizard 要拿到主题')
+  assert.match(CLIENT, /function Wizard\(\{ cfg, setCfg, onDone, dark \}\)/, 'Wizard 要拿到主题')
   assert.match(CLIENT, /function WizStatus\(\{ state, text, dark \}\)/, 'WizStatus 要拿到主题')
 })

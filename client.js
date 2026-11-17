@@ -170,45 +170,6 @@ window.__ModuleLoader__.load({
       cursor: 'pointer', whiteSpace: 'nowrap',
     };
 
-    // ── 分段条（2026-11-17 主人选定）────────────────────────────────────────
-    //   主人把别的选法全否了（一排小按钮 / 滑条 / 滑轨 / 整行打勾 / 聊天式 / 开关），
-    //   在一页真样本里挑了 B「分段条」。
-    //   2026-11-17 第二版（他看着第一版说「不喜欢」）：第一版是"左边标签、右边小胶囊"，
-    //   中间又空出一大片，跟设置页那个毛病一模一样。现在改成：标签在上、分段条整行铺满、
-    //   每段等宽 —— 一眼看过去是一整块，不是角落里挂着一个小胶囊。
-    //   他还有两条硬要求：标签统一四字；每项配一句人话解释。
-    //   选中色用固定品牌蓝：主题变量在深色下是近白，白字会看不见。
-    const SEG_ACCENT = '#4d6bfe';
-    function Seg({ label, hint, value, options, onChange }) {
-      return h('div', { style: { padding: '10px 0 12px' } },
-        h('div', { style: { fontSize: 13.5, color: C.text, marginBottom: 7 } }, label),
-        h('div', {
-          style: {
-            display: 'flex', background: 'rgba(127,127,127,0.12)',
-            borderRadius: 10, padding: 3, gap: 3, width: '100%',
-          },
-        },
-          ...options.map((o) => h('button', {
-            key: o.v, type: 'button', onClick: () => onChange(o.v),
-            style: {
-              flex: '1 1 0', padding: '7px 8px', borderRadius: 8, border: 'none',
-              fontSize: 13, fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap',
-              background: value === o.v ? SEG_ACCENT : 'transparent',
-              color: value === o.v ? '#fff' : C.text3,
-              fontWeight: value === o.v ? 600 : 400,
-              transition: 'background .15s ease, color .15s ease',
-            },
-          }, o.t))),
-        hint ? h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 6, lineHeight: '18px' } }, hint) : null,
-      );
-    }
-
-    // 当前值不在几个档位里时（老配置，比如 20 秒 / 45 秒），把它补成一项，别把人家现有设置吃掉
-    const withCurrent = (opts, cur, labelOf) => {
-      const has = opts.some((o) => String(o.v) === String(cur));
-      return (has || cur === '' || cur == null) ? opts : opts.concat([{ v: String(cur), t: labelOf(cur) }]);
-    };
-
     // 2026-11-07：文本输入框要"失焦/回车才存"。
     //   为什么不能像数字框那样 onChange 直接 save：peer 一变后端就重绑哨兵，
     //   逐字保存 = 每敲一个字母停一次哨兵、再启一次（实测会一直空转）。
@@ -261,12 +222,10 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // ── 首次引导（2026-11-15，2026-11-17 重排）────────────────────────────
+    // ── 首次引导（2026-11-15）──────────────────────────────────────────────
     //   设计原则：每步只问一件事；能自动读的绝不让主人填；判据都在后端，前端只显示。
-    //   2026-11-17：进页面先认现状（Wizard 里的 pre），已经配好的步骤直接灰勾，不逼主人从头点一遍。
-    //   第 1、2、4 步不能跳过（没登录什么都不能干；没认主人分不清谁的话算命令），其余可稍后。
-    //   （顺手删了一个没人引用的旧步骤标题数组：它只有 5 个元素、从来没被渲染过，
-    //     2026-11-17 我照着它误判成「标题整体错位」，其实真正显示的标题一直是另一份。）
+    //   第 1、3 步不能跳过（没登录什么都不能干；没认主人分不清谁的话算命令），其余可稍后。
+    const WIZ_STEPS = ['登录抖音号', '确认本号', '认领主人', '谁能命令它', '让它干什么活']
 
     function WizStatus({ state, text, dark }) {
       const T = TONE(dark)
@@ -277,67 +236,21 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function Wizard({ cfg, setCfg, onDone, dark, runStatus, personas }) {
+    function Wizard({ cfg, setCfg, onDone, dark }) {
       const T = TONE(dark)
-      // ── 2026-11-17：进页面先认现状（只读，不写任何配置）─────────────────────
-      //   主人要的是"哪一步已经好了就照旧、哪个缺就停在哪儿"，不是每次从第 1 步重来。
-      //   判据全部来自现成数据：配置里的值 + /status 里"上次读到消息"。
-      //   ⚠️ 这里只算给界面看，一个字节都不写；主人点「下一步」/「完成」才落盘。
-      const wSelf = (cfg && cfg.self) || {}
-      const wClaim = (cfg && cfg.claim) || null
-      const pre = {
-        1: { ok: true, detail: String((cfg && cfg.sessionId) || '').trim() ? '沿用你上次选的对话' : '没指定，会自动发给最近在用的那个对话' },
-        2: { ok: !!(runStatus && runStatus.lastRead), detail: (runStatus && runStatus.lastRead) ? ('上次读到消息：' + runStatus.lastRead + (runStatus.lastCount ? '（' + runStatus.lastCount + ' 条）' : '')) : '还没有成功读到过私信，测一下' },
-        3: { ok: !!(wSelf.stored && String(wSelf.uid || '').trim()), detail: wSelf.stored ? ('已记住：' + (wSelf.nick || '（没学到昵称）') + (wSelf.uid ? '（ID ' + String(wSelf.uid).slice(0, 8) + '…）' : '')) : '还没记住这个号是谁' },
-        4: { ok: !!(wClaim && String(wClaim.sec_uid || '').trim()), detail: (wClaim && wClaim.sec_uid) ? ('已认领：' + (wClaim.nick || '对方')) : '还没认领主人' },
-        5: { ok: !!(cfg && cfg.personaPreset), detail: (cfg && cfg.personaPreset) ? '已选好一套人设' : '没选（＝默认口气），可以先跳过' },
-        6: { ok: true, detail: cfg.intervalSeconds ? ('现在每 ' + cfg.intervalSeconds + ' 秒看一次私信') : '按现在的私信设置带出来了' },
-        7: { ok: true, detail: cfg.autoScrollEnabled ? ('现在开着，每天最多 ' + (cfg.autoScrollPerDay || 0) + ' 条') : '现在没开刷视频' },
-        8: { ok: true, detail: (cfg.commentAutoReplyWork || cfg.commentAutoReplyOthers) ? ('现在开着，一小时最多 ' + (cfg.commentPerHour || 30) + ' 条') : '现在没开评论区自动回' },
-      }
-      const seedStatus = {}
-      const seedMsg = {}
-      for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) if (pre[n].ok) { seedStatus[n] = 'ok'; seedMsg[n] = pre[n].detail }
-      // 停在第一个"必须要、但还缺"的那一步；都齐了就从第 1 步开始看
-      const firstMissing = [1, 2, 4].find((n) => !pre[n].ok) || 1
-      const [step, setStep] = useState(firstMissing)
-      const [status, setStatus] = useState(seedStatus)
-      const [msg, setMsg] = useState(seedMsg)
+      const [step, setStep] = useState(1)
+      const [status, setStatus] = useState({})
+      const [msg, setMsg] = useState({})
       const [busy, setBusy] = useState('')
       const [me, setMe] = useState(null)
       const [owner, setOwner] = useState(null)
       const [sessions, setSessions] = useState(null)
       const [sessionId, setSessionId] = useState(cfg.sessionId || '')
       const [authority, setAuthority] = useState(cfg.strangerPolicy === 'ignore' ? 'owner' : (cfg.strangerPolicy === 'reply' ? 'reply' : 'notify'))
-      const [dmOn, setDmOn] = useState(cfg.ownerAutoReply !== false)
-      const [replyMode, setReplyMode] = useState(cfg.replyMode || 'conclusion')
-      const [imageMode, setImageMode] = useState(cfg.imageMode || 'read')
-      const [shareCardMode, setShareCardMode] = useState(cfg.shareCardMode || 'analyze')
-      const [intervalSec, setIntervalSec] = useState(Number(cfg.intervalSeconds) || 30)
-      const [scrollOn, setScrollOn] = useState(!!cfg.autoScrollEnabled)
-      const [scrollPerDay, setScrollPerDay] = useState(Number(cfg.autoScrollPerDay) || 0)
-      // 刷视频那几个（2026-11-17 主人说"这一步内容太少"，把该有的都摆出来）
-      const WIN_PRESETS = {
-        midnight: ['12:00-14:00', '18:00-09:00'],
-        evening: ['18:00-23:00'],
-        allday: ['00:00-23:59'],
-      }
-      const [scrollWindow, setScrollWindow] = useState(() => {
-        const key = (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).join('|')
-        if (key === '18:00-23:00') return 'evening'
-        if (key === '00:00-23:59') return 'allday'
-        return 'midnight'
-      })
-      const [winTouched, setWinTouched] = useState(false)   // 只有主人动过才覆盖他原来的时间段
-      const [deliverDm, setDeliverDm] = useState(cfg.autoScrollDeliverDm !== false)
-      const [writeReport, setWriteReport] = useState(!!cfg.autoScrollWriteReport)
-      const [perDay, setPerDay] = useState(Number(cfg.commentPerDay) || 150)
-      const [maxChars, setMaxChars] = useState(Number(cfg.commentMaxChars) || 30)
-      const [workOn, setWorkOn] = useState(!!cfg.commentAutoReplyWork)
-      const [othersOn, setOthersOn] = useState(!!cfg.commentAutoReplyOthers)
+      const [tasks, setTasks] = useState({ dm: cfg.ownerAutoReply !== false, work: !!cfg.commentAutoReplyWork, others: !!cfg.commentAutoReplyOthers })
       const [onlyDuty, setOnlyDuty] = useState(false)
+      const [replyMode, setReplyMode] = useState(cfg.replyMode || 'conclusion')
       const [perHour, setPerHour] = useState(cfg.commentPerHour || 30)
-      const [personaPick, setPersonaPick] = useState(cfg.personaPreset || '')
       const [checks, setChecks] = useState(null)
       const [warn, setWarn] = useState('')
 
@@ -415,37 +328,19 @@ window.__ModuleLoader__.load({
         }).catch(() => { setBusy(''); setStat(4, 'fail', '认领失败：接口没回应') })
       }
       const finish = () => {
-        if (!dmOn && !workOn && !othersOn && !scrollOn && !onlyDuty) {
-          setWarn('你一个活都没开。如果只想让它守着、不回话，请勾「只值守、不自动回复」')
+        if (!tasks.dm && !tasks.work && !tasks.others && !onlyDuty) {
+          setWarn('你一个自动回复都没勾。如果只想让它值守，请勾上面那句「只值守、不自动回复」')
           return
         }
         setWarn(''); setBusy('finish')
         post('finish', {
-          ownerAutoReply: !!dmOn,
-          replyMode,
-          imageMode: imageMode === 'skip' ? 'skip' : 'read',
-          shareCardMode: shareCardMode === 'chat' ? 'chat' : 'analyze',
-          intervalSeconds: Math.max(10, Math.min(3600, Number(intervalSec) || 30)),
+          ownerAutoReply: !!tasks.dm,
           strangerPolicy: authority === 'owner' ? 'ignore' : (authority === 'notify' ? 'notify' : 'reply'),
-          commentAutoReply: !!(workOn || othersOn),
-          commentAutoReplyWork: !!workOn,
-          commentAutoReplyOthers: !!othersOn,
+          commentAutoReply: !!(tasks.work || tasks.others),
+          commentAutoReplyWork: !!tasks.work,
+          commentAutoReplyOthers: !!tasks.others,
+          replyMode,
           commentPerHour: Math.max(1, Math.min(200, Number(perHour) || 30)),
-          // 刷视频默认"先不开"（0 条）：勾了才打开，免得刚配好它自己就开始刷
-          autoScrollEnabled: !!scrollOn,
-          autoScrollPerDay: scrollOn ? Math.max(1, Math.min(30, Number(scrollPerDay) || 5)) : 0,
-          // 时间段：主人动过才写，否则保留他原来的（别用预设把他的自定义覆盖掉）
-          ...(scrollOn ? {
-            autoScrollWindows: (winTouched || !(Array.isArray(cfg.autoScrollWindows) && cfg.autoScrollWindows.length))
-              ? (WIN_PRESETS[scrollWindow] || WIN_PRESETS.midnight)
-              : cfg.autoScrollWindows,
-            autoScrollDeliverDm: !!deliverDm,
-            autoScrollWriteReport: !!writeReport,
-          } : {}),
-          commentPerDay: Math.max(1, Math.min(500, Number(perDay) || 150)),
-          commentMaxChars: Math.max(5, Math.min(200, Number(maxChars) || 30)),
-          // 性格：只有真选了一套才写，没选就保持原样（不覆盖主人已有的选择）
-          ...(personaPick ? { personaPreset: personaPick } : {}),
         }).then((d) => {
           if (d && d.config) setCfg(d.config)
           return fetch('/api/douyin-watch/doctor', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }).then((r) => r.json())
@@ -453,24 +348,16 @@ window.__ModuleLoader__.load({
           .catch(() => { setBusy(''); setWarn('保存失败：接口没回应') })
       }
 
-      // 2026-11-17 重排（主人定的顺序，一步一件事）：
-      //   ①「谁能命令它」并进第 4 步（认人 + 别人怎么办本来就是一件事）；
-      //   ②第 5 步空出来给「它的性格」——它一开口就用这套口气，得在谈"怎么回"之前定；
-      //   ③第 6 步只讲私信里面那些设置，不再和刷视频、评论区混在一起；
-      //   ④刷视频、评论区各占一步（主人原话：不能笼统地混为一起）。
-      const steps = ['认领会话', '登录抖音号', '确认本号', '认领主人', '它的性格', '私信怎么回', '刷视频', '评论区', '体检']
-      const STEP_MAX = steps.length
-      const LAST_ASK = STEP_MAX - 1        // 最后一个要填的步骤（填完就体检）
-      const checkStep = { session: 1, page: 2, gate: 2, who: 4, 'comment-api': 8 }
+      const steps = ['认领会话', '登录抖音号', '确认本号', '认领主人', '谁能命令它', '让它干什么活', '体检']
+      const checkStep = { session: 1, page: 2, gate: 2, who: 4, 'comment-api': 6 }
       const mustDo = { 1: true, 2: true, 4: true }
       const canGo = (n) => (mustDo[n] ? status[n] === 'ok' : true)
-      const next = () => { if (step < LAST_ASK && canGo(step)) { setStep(step + 1); setWarn('') } }
+      const next = () => { if (step < 6 && canGo(step)) { setStep(step + 1); setWarn('') } }
       const prev = () => { if (step > 1) { setStep(step - 1); setWarn('') } }
       // 向导页里也要有「重新引导」的入口（常驻、看得见）：清掉本页的检测状态，从第 1 步重来。
       //   只动界面状态，不写任何文件 —— 已经存好的配置 / self.json 不受影响。
       const restartWizard = () => {
-        // 2026-11-17：重置界面状态，但保留"现状"的灰勾（已经配好的步骤不该因为点了一次重新开始又变回未检测）
-        setStep(1); setWarn(''); setStatus(seedStatus); setMsg(seedMsg); setMe(null); setOwner(null); setChecks(null)
+        setStep(1); setWarn(''); setStatus({}); setMsg({}); setMe(null); setOwner(null); setChecks(null)
       }
       const btn = (label, onClick, opts) => h('button', {
         type: 'button', disabled: !!opts?.disabled, onClick,
@@ -540,224 +427,40 @@ window.__ModuleLoader__.load({
       }
       if (step === 4) {
         body.push(h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '20px' } },
-          '去抖音里点开「你跟主人那条私信会话」（停在会话列表不算），点开之后回来点下面按钮。'
-          + '认领之后，它就把这条会话当成"主人的话"，别的会话不会当成命令。'))
-        body.push(h('div', { style: { marginTop: 10 } }, btn(busy === 'claim' ? '读取中…' : (pre[4].ok ? '重新认一次' : '读取当前会话'), claim, { disabled: !!busy, primary: true })))
+          '去抖音里点开「你跟主人那条私信会话」（停在会话列表不算），点开之后回来点下面按钮。'))
+        body.push(h('div', { style: { marginTop: 10 } }, btn(busy === 'claim' ? '读取中…' : '读取当前会话', claim, { disabled: !!busy, primary: true })))
         if (owner) body.push(h('div', { style: { marginTop: 8, fontSize: 12.5, color: C.text } }, '已认领：', h('b', null, owner.nick || '对方')))
         body.push(h(WizStatus, { state: status[4], text: msg[4], dark }))
         body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 6 } },
           '判据：对方的 ID 不能等于第 3 步的本号 ID（本号自己不能当主人）；同名但不同号会放行。'))
-
-        // 2026-11-17：原来的第 5 步「谁能命令它」并到这里 —— 认人和"别人怎么办"是同一件事的两半。
-        body.push(h('div', { style: { marginTop: 14, paddingTop: 12, borderTop: '1px solid ' + C.line } },
-          h(Seg, {
-            label: '别人的私信',
-            value: authority,
-            onChange: setAuthority,
-            options: [
-              { v: 'owner', t: '只认主人' },
-              { v: 'notify', t: '都只提醒' },
-              { v: 'reply', t: '谁都能回' },
-            ],
-            hint: authority === 'owner' ? '别人发来的：不回你，也不提醒你'
-              : authority === 'notify' ? '别人发来的：告诉你一声，但它不回'
-                : '别人发来的：陌生人也回（容易被冒充，不建议）',
-          })))
-        if (authority === 'reply') {
-          body.push(h('div', { style: { fontSize: 11.5, color: T.warn, marginTop: 2, lineHeight: '18px' } },
-            '选了这一档，任何陌生人都能指挥它。涉及账号、文件、命令的话它仍会先问你，但分不出谁是主人。'))
-        }
-        body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 8, lineHeight: '18px' } },
-          '它只盯这一条会话（' + (pre[4].ok ? '认领时已自动填好' : '认领后自动填') + '）：别人发给你的私信它看不到，也不会去翻。'))
       }
       if (step === 5) {
-        // 2026-11-17 新增：性格放在"怎么回"之前 —— 它一开口就用这套口气，私信和评论区共用。
-        const plist = (personas && Array.isArray(personas.list)) ? personas.list : []
-        const cur = personaPick ? plist.find((p) => p.id === personaPick) : null
-        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, lineHeight: '20px' } },
-          '它回私信、回评论，都用这一套口气。先定它是个什么样的人，后面"怎么回"才有依据。'))
-        body.push(h('div', { style: { marginTop: 10 } },
-          h('select', {
-            value: personaPick,
-            onChange: (e) => setPersonaPick(e.target.value),
-            style: Object.assign({}, ctlBase, { width: 320 }),
-          },
-            h('option', { value: '' }, '不用人设（默认口气）'),
-            ...plist.map((p) => h('option', { key: p.id, value: p.id },
-              p.name + (p.builtin ? '（内置）' : '（导入）') + (p.enabled === false ? '·已停用' : ''))),
-          )))
-        if (cur) {
-          body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 6 } },
-            '选中的这套有 ' + (cur.chars || 0) + ' 字，回私信和评论区都用它。'))
-        }
-        body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 6, lineHeight: '18px' } },
-          plist.length
-            ? ('本机现在有 ' + plist.length + ' 套。要导入自己的、改名、停用，去设置页「人设」那块。这一条也可以先跳过。')
-            : '人设列表没读出来。可以先跳过，以后在设置页「人设」里加。'))
-        body.push(h(WizStatus, { state: status[5], text: msg[5], dark }))
+        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, marginBottom: 6 } }, '除了主人，别人的私信怎么处理？'))
+        ;[['owner', '只认主人', '别人发来的一律不回，也不提醒'], ['notify', '主人 + 陌生人只提醒', '陌生人的消息会告诉你，但不替它回'], ['reply', '谁的私信都能回', '包括陌生人（不推荐，容易被冒充）']].forEach(([v, t, d]) => {
+          body.push(h('label', { key: v, style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '7px 0', cursor: 'pointer' } },
+            h('input', { type: 'radio', name: 'dy-auth', checked: authority === v, onChange: () => setAuthority(v), style: { marginTop: 3 } }),
+            h('div', null, h('div', { style: { fontSize: 12.5, color: C.text } }, t), h('div', { style: { fontSize: 11.5, color: C.text3 } }, d))))
+        })
+        body.push(h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 4 } }, '（「指定好友也能回」需要白名单，这版还没做。换成第三档之前请想清楚：那是任何陌生人都能指挥它。）'))
       }
       if (step === 6) {
-        // 2026-11-17（主人纠正）：这一步**只讲私信里面那些设置**，不许和刷视频、评论区混在一起。
-        //   他原话：「谁告诉你说你把这些都放在第六部里面」「第六部是私信里面的那些设置」。
-        //   控件用他挑的「分段条」（见 Seg），标签统一四字，每项配一句人话。
-        body.push(h(Seg, {
-          label: '主人消息',
-          value: dmOn ? 'on' : 'off',
-          onChange: (v) => setDmOn(v === 'on'),
-          options: [{ v: 'on', t: '看完就回' }, { v: 'off', t: '只看不回' }],
-          hint: dmOn ? '它直接答你' : '只提醒你，它不答',
-        }))
-        if (dmOn) {
-          body.push(h(Seg, {
-            label: '回复多长',
-            value: replyMode,
-            onChange: setReplyMode,
-            options: [{ v: 'conclusion', t: '回得完整' }, { v: 'brief', t: '只回结论' }],
-            hint: replyMode === 'brief' ? '只发结论那一句，细节留在 DSH' : '可能好几段，把话说全',
-          }))
-        }
-        body.push(h(Seg, {
-          label: '图片表情',
-          value: imageMode,
-          onChange: setImageMode,
-          options: [{ v: 'read', t: '看懂再回' }, { v: 'skip', t: '当没看见' }],
-          hint: imageMode === 'skip' ? '只按文字答，不读图（省时间也不费流量）' : '先把图看一遍再答',
-        }))
-        body.push(h(Seg, {
-          label: '分享视频',
-          value: shareCardMode,
-          onChange: setShareCardMode,
-          options: [{ v: 'analyze', t: '自己去看' }, { v: 'chat', t: '你叫才看' }],
-          hint: shareCardMode === 'chat' ? '只当话题接着聊，你说要看才看' : '转成文字和画面，再跟你讲这条片子',
-        }))
-        body.push(h(Seg, {
-          label: '查看频率',
-          value: String(intervalSec),
-          onChange: (v) => setIntervalSec(Number(v)),
-          options: withCurrent(
-            [{ v: '20', t: '20 秒' }, { v: '30', t: '30 秒' }, { v: '60', t: '60 秒' }],
-            String(intervalSec),
-            (c) => c + ' 秒',
-          ),
-          hint: intervalSec <= 20 ? '最及时，也最费电脑' : (intervalSec >= 60 ? '省电脑，提醒会慢一点' : '折中'),
-        }))
+        body.push(h('div', { style: { fontSize: 12.5, color: C.text2, marginBottom: 6 } }, '勾上你想让它干的活。全都不勾也行，那它就只值守。'))
+        ;[['dm', '私信自动回', '主人发来消息，直接回'], ['work', '作品评论自动回', '你自己视频下面的评论'], ['others', '评论区自动回', '别人视频下有人回你']].forEach(([k, t, d]) => {
+          body.push(h('label', { key: k, style: { display: 'flex', gap: 8, alignItems: 'flex-start', padding: '7px 0', cursor: 'pointer' } },
+            h('input', { type: 'checkbox', checked: !!tasks[k], onChange: (e) => setTasks((p) => ({ ...p, [k]: e.target.checked })), style: { marginTop: 3 } }),
+            h('div', null, h('div', { style: { fontSize: 12.5, color: C.text } }, t), h('div', { style: { fontSize: 11.5, color: C.text3 } }, d))))
+        })
+        body.push(h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0', cursor: 'pointer' } },
+          h('input', { type: 'checkbox', checked: onlyDuty, onChange: (e) => setOnlyDuty(e.target.checked) }),
+          h('span', { style: { fontSize: 12, color: C.text2 } }, '只值守、不自动回复（我确认）')))
+        body.push(h(Row, { label: '回复多长' },
+          h('select', { value: replyMode, onChange: (e) => setReplyMode(e.target.value), style: Object.assign({}, ctlBase, { width: 160 }) },
+            h('option', { value: 'conclusion' }, '完整（可能好几段）'),
+            h('option', { value: 'brief' }, '精简（只发一句结论）'))))
+        body.push(h(Row, { label: '每小时最多几条', hint: '默认 30，防批量刷评' },
+          h('input', { type: 'number', min: 1, max: 200, value: perHour, onChange: (e) => setPerHour(e.target.value), style: Object.assign({}, ctlBase, { width: 90 }) })))
       }
       if (step === 7) {
-        // 刷视频单独一步（主人：不能笼统混为一起）。
-        // 2026-11-17 主人：「不如原来的，我说是内容是不是太少了，这一步」——
-        //   所以这一步把刷视频该有的都摆出来（时间、条数、要不要告诉你、要不要日报），
-        //   不再是孤零零一个开关。
-        body.push(h(Seg, {
-          label: '要不要刷',
-          value: scrollOn ? 'on' : 'off',
-          onChange: (v) => setScrollOn(v === 'on'),
-          options: [{ v: 'on', t: '要刷' }, { v: 'off', t: '不刷' }],
-          hint: scrollOn ? '到时间自己去刷，挑几条值得的，刷完跟你讲' : '完全不刷（默认）',
-        }))
-        if (scrollOn) {
-          body.push(h(Seg, {
-            label: '什么时候',
-            value: scrollWindow,
-            onChange: (v) => { setScrollWindow(v); setWinTouched(true); },
-            options: [{ v: 'midnight', t: '中午晚上' }, { v: 'evening', t: '只晚上' }, { v: 'allday', t: '全天都行' }],
-            hint: scrollWindow === 'midnight' ? '中午 12–14 点，晚上 18 点到第二天 9 点'
-              : scrollWindow === 'evening' ? '晚上 18 点到 23 点'
-                : '00:00 到 23:59，白天也刷（会占电脑）',
-          }))
-          body.push(h(Seg, {
-            label: '每天几条',
-            value: String(scrollPerDay || 5),
-            onChange: (v) => setScrollPerDay(Number(v)),
-            options: withCurrent(
-              [{ v: '3', t: '3 条' }, { v: '5', t: '5 条' }, { v: '10', t: '10 条' }],
-              String(scrollPerDay || 5),
-              (c) => c + ' 条',
-            ),
-            hint: '一天最多挑这么多条看',
-          }))
-          body.push(h(Seg, {
-            label: '刷完告诉我',
-            value: deliverDm ? 'on' : 'off',
-            onChange: (v) => setDeliverDm(v === 'on'),
-            options: [{ v: 'on', t: '发私信' }, { v: 'off', t: '不用' }],
-            hint: deliverDm ? '刷完把结果私信发给你' : '刷完不打扰你',
-          }))
-          body.push(h(Seg, {
-            label: '写日报',
-            value: writeReport ? 'on' : 'off',
-            onChange: (v) => setWriteReport(v === 'on'),
-            options: [{ v: 'on', t: '要写' }, { v: 'off', t: '不写' }],
-            hint: writeReport ? '每天存一份文本文件，记事本能打开' : '不生成文件（默认）',
-          }))
-        }
-      }
-      if (step === 8) {
-        // 评论区单独一步，同样把该有的都摆出来（回哪些、多快、多少、多长）
-        body.push(h(Seg, {
-          label: '作品评论',
-          value: workOn ? 'on' : 'off',
-          onChange: (v) => setWorkOn(v === 'on'),
-          options: [{ v: 'on', t: '要回' }, { v: 'off', t: '不回' }],
-          hint: workOn ? '有人在你作品下留言，它去回' : '不碰你自己作品下面的评论',
-        }))
-        body.push(h(Seg, {
-          label: '别人回你',
-          value: othersOn ? 'on' : 'off',
-          onChange: (v) => setOthersOn(v === 'on'),
-          options: [{ v: 'on', t: '要接' }, { v: 'off', t: '不接' }],
-          hint: othersOn ? '你在别人作品下评论、有人回你时，它接话' : '别人回你，它不接',
-        }))
-        if (workOn || othersOn) {
-          body.push(h(Seg, {
-            label: '频率上限',
-            value: String(perHour || 30),
-            onChange: (v) => setPerHour(Number(v)),
-            options: withCurrent(
-              [{ v: '30', t: '30 条' }, { v: '60', t: '60 条' }, { v: '100', t: '100 条' }],
-              String(perHour || 30),
-              (c) => c + ' 条',
-            ),
-            hint: '每小时最多回几条，只管评论区',
-          }))
-          body.push(h(Seg, {
-            label: '每天上限',
-            value: String(perDay || 150),
-            onChange: (v) => setPerDay(Number(v)),
-            options: withCurrent(
-              [{ v: '100', t: '100 条' }, { v: '150', t: '150 条' }, { v: '200', t: '200 条' }],
-              String(perDay || 150),
-              (c) => c + ' 条',
-            ),
-            hint: '一天最多回几条，防刷过头',
-          }))
-          body.push(h(Seg, {
-            label: '字数上限',
-            value: String(maxChars || 30),
-            onChange: (v) => setMaxChars(Number(v)),
-            options: withCurrent(
-              [{ v: '15', t: '15 字' }, { v: '30', t: '30 字' }, { v: '50', t: '50 字' }],
-              String(maxChars || 30),
-              (c) => c + ' 字',
-            ),
-            hint: '每条评论最多几个字',
-          }))
-          body.push(h('div', { style: { fontSize: 11.5, color: C.text3, lineHeight: '18px', padding: '6px 0' } },
-            '评论区的语气、禁用词、跳过哪些人，在设置页「公开评论」和「评论区自动回」里改。'))
-        }
-        // 一个都没开时，给一条明确的"只守着"，代替以前那个勾选框
-        if (!dmOn && !workOn && !othersOn && !scrollOn) {
-          body.push(onlyDuty
-            ? h('div', { style: { fontSize: 12, color: T.ok, padding: '12px 0 2px', borderTop: '1px solid ' + C.line, marginTop: 10 } },
-                '已设成：只守着，不回话')
-            : h('div', { style: { padding: '12px 0 2px', borderTop: '1px solid ' + C.line, marginTop: 10 } },
-                h('div', { style: { fontSize: 12, color: C.text2, marginBottom: 6 } }, '上面全都不开 —— 它就只看新消息，不回话。'),
-                h('button', {
-                  type: 'button', onClick: () => setOnlyDuty(true),
-                  style: Object.assign({}, btnBase, { cursor: 'pointer' }),
-                }, '就这样，只守着')))
-        }
-      }
-      if (step === STEP_MAX) {
         const list = Array.isArray(checks) ? checks : []
         const bad = list.filter((c) => !c.ok)
         body.push(h('div', { style: { fontSize: 13, fontWeight: 600, color: bad.length ? T.danger : T.ok } },
@@ -767,29 +470,14 @@ window.__ModuleLoader__.load({
             h('div', { style: { fontSize: 12.5, color: c.ok ? C.text : T.danger } }, (c.ok ? '✓ ' : '✕ ') + c.name),
             h('div', { style: { fontSize: 11.5, color: C.text3 } }, c.detail || '')),
           c.ok ? null : btn('去修', () => { setStep(checkStep[c.key] || 2); setWarn('') }))))
-
-        // 2026-11-17：走完告诉主人"以后去哪改"。
-        //   主人上次想重进引导找不到入口，点了「清除本机记录」，把 self.json 删了 —— 这个坑得在结束页就说明白。
-        const where = [
-          '私信怎么回、图片表情、你分享的视频 → 设置页「私信监听」',
-          '刷视频 → 「自动刷视频」',
-          '评论区 → 「公开评论」和「评论区自动回」',
-          '性格 → 「人设」',
-          '卡住了 → 页面最上面的运行状态，或者「维护」里的检查',
-        ]
-        body.push(h('div', { style: { marginTop: 14, paddingTop: 12, borderTop: '1px solid ' + C.line } },
-          h('div', { style: { fontSize: 12.5, fontWeight: 600, color: C.text } }, '以后要改，去哪找'),
-          ...where.map((t, i) => h('div', { key: 'w' + i, style: { fontSize: 12, color: C.text2, marginTop: 4, lineHeight: '18px' } }, '· ' + t)),
-          h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 8, lineHeight: '18px' } },
-            '想重新走一遍这个引导：点页面上的「重新引导」。别点「清除本机记录」——那是删掉"这个号是谁"，删了它就认不出自己了。')))
       }
 
-      const pct = Math.round((Math.min(step, STEP_MAX) / STEP_MAX) * 100)
-      const hint = step === STEP_MAX ? '' : (mustDo[step] ? '这一步不能跳过' : '可以稍后设置')
+      const pct = Math.round((Math.min(step, 7) / 7) * 100)
+      const hint = step === 7 ? '' : (mustDo[step] ? '这一步不能跳过' : '可以稍后设置')
       return h('div', { 'data-dy-panel': '1', 'data-dy-wizard': '1', style: { padding: '6px 0 16px' } },
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
           h('div', { style: { fontSize: 13.5, fontWeight: 600, color: C.text } },
-            '第 ' + step + ' / ' + STEP_MAX + ' 步 · ' + steps[step - 1]),
+            step === 7 ? '第 7 / 7 步 · 体检' : ('第 ' + step + ' / 7 步 · ' + steps[step - 1])),
           h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
             h('div', { style: { fontSize: 11.5, color: C.text3 } }, hint),
             h('button', {
@@ -805,13 +493,12 @@ window.__ModuleLoader__.load({
         warn ? h('div', { style: { fontSize: 12, color: T.danger, marginTop: 8 } }, warn) : null,
         h('div', { style: { display: 'flex', justifyContent: 'space-between', marginTop: 12 } },
           h('div', null,
-            step > 1 && step <= LAST_ASK ? btn('上一步', prev, { disabled: !!busy }) : null,
-            step === STEP_MAX ? btn('返回设置', () => onDone()) : null),
+            step > 1 && step <= 6 ? btn('上一步', prev, { disabled: !!busy }) : null,
+            step === 7 ? btn('返回设置', () => onDone()) : null),
           h('div', null,
-            // 3 确认本号 / 5 性格 / 6 私信 / 7 刷视频 / 8 评论区 都能先跳过
-            [3, 5, 6, 7, 8].includes(step) ? btn('稍后设置', () => { setStep(Math.min(LAST_ASK, step + 1)); setWarn('') }) : null,
-            step < LAST_ASK ? btn('下一步', next, { disabled: !canGo(step) || !!busy, primary: true }) : null,
-            step === LAST_ASK ? btn(busy === 'finish' ? '保存中…' : '完成，体检', finish, { disabled: !!busy, primary: true }) : null)),
+            (step === 3 || step === 5 || step === 6) ? btn('稍后设置', () => { setStep(Math.min(6, step + 1)); setWarn('') }) : null,
+            step < 6 ? btn('下一步', next, { disabled: !canGo(step) || !!busy, primary: true }) : null,
+            step === 6 ? btn(busy === 'finish' ? '保存中…' : '完成，体检', finish, { disabled: !!busy, primary: true }) : null)),
       )
     }
 
@@ -1215,8 +902,7 @@ window.__ModuleLoader__.load({
 
       // 首次进来（或点「重新引导」）→ 直接给向导，不进常规设置
       if (cfg && (cfg.onboarded === false || wizOpen)) {
-        // runStatus：给它"上次读到消息"用来判断登录还有没有效；personas：第 5 步选性格用
-        return h(Wizard, { cfg, setCfg, dark, runStatus: status, personas, onDone: () => { setWizOpen(false); load(); } });
+        return h(Wizard, { cfg, setCfg, dark, onDone: () => { setWizOpen(false); load(); } });
       }
 
       // 2026-11-15（主人要求）：顶部常驻「重新引导」入口 + 「身份不自洽」提示。
