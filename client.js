@@ -320,18 +320,6 @@ window.__ModuleLoader__.load({
       // 2026-11-17：这几条怎么摊在时间段里（摊开 = 每段随机一个时刻，像人；一次刷完 = 全压在开头）
       const [scrollSpread, setScrollSpread] = useState(cfg.autoScrollSpread === 'burst' ? 'burst' : 'spread')
       // 刷视频那几个（2026-11-17 主人说"这一步内容太少"，把该有的都摆出来）
-      const WIN_PRESETS = {
-        midnight: ['12:00-14:00', '18:00-09:00'],
-        evening: ['18:00-23:00'],
-        allday: ['00:00-23:59'],
-      }
-      const [scrollWindow, setScrollWindow] = useState(() => {
-        const key = (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).join('|')
-        if (key === '18:00-23:00') return 'evening'
-        if (key === '00:00-23:59') return 'allday'
-        return 'midnight'
-      })
-      const [winTouched, setWinTouched] = useState(false)   // 只有主人动过才覆盖他原来的时间段
       const [deliverDm, setDeliverDm] = useState(cfg.autoScrollDeliverDm !== false)
       const [writeReport, setWriteReport] = useState(!!cfg.autoScrollWriteReport)
       const [perDay, setPerDay] = useState(Number(cfg.commentPerDay) || 150)
@@ -437,11 +425,9 @@ window.__ModuleLoader__.load({
           // 刷视频默认"先不开"（0 条）：勾了才打开，免得刚配好它自己就开始刷
           autoScrollEnabled: !!scrollOn,
           autoScrollPerDay: scrollOn ? Math.max(1, Math.min(30, Number(scrollPerDay) || 5)) : 0,
-          // 时间段：主人动过才写，否则保留他原来的（别用预设把他的自定义覆盖掉）
+          // 时间段：引导页**不再碰**（2026-11-17 主人：引导里那三个预设跟设置页不是一套，且 5 条不必圈死钟点）。
+          //   要限时段，去设置页「自动刷视频」里调，那边能选到分、能加多段。
           ...(scrollOn ? {
-            autoScrollWindows: (winTouched || !(Array.isArray(cfg.autoScrollWindows) && cfg.autoScrollWindows.length))
-              ? (WIN_PRESETS[scrollWindow] || WIN_PRESETS.midnight)
-              : cfg.autoScrollWindows,
             autoScrollSpread: scrollSpread === 'burst' ? 'burst' : 'spread',
             autoScrollDeliverDm: !!deliverDm,
             autoScrollWriteReport: !!writeReport,
@@ -660,24 +646,19 @@ window.__ModuleLoader__.load({
         }))
         // 2026-11-17：选「不刷」时下面这几项也显示出来（灰着、点不动），
         //   不然这一步空得只剩一个开关，看着就像「内容太少」。
+        // 2026-11-17 第二版：这里**不再问时间段**。
+        //   主人指出两件事：①引导里那三个时段是我自己编的预设，跟设置页那套（能选到分、能加多段）不是一回事，
+        //   等于两套规则；②一天才 5 条，圈死在几个钟点里纯属多余。
+        //   所以引导页不碰时间段，要限时段去设置页调；没设时段就摊在机器醒着的时间（见 index.js buildSlotTimes）。
         body.push(h('div', { style: scrollOn ? null : { opacity: 0.45, pointerEvents: 'none' } },
-          h(Seg, {
-            label: '什么时候',
-            value: scrollWindow,
-            onChange: (v) => { setScrollWindow(v); setWinTouched(true); },
-            options: [{ v: 'midnight', t: '中午晚上' }, { v: 'evening', t: '只晚上' }, { v: 'allday', t: '全天都行' }],
-            hint: scrollWindow === 'midnight' ? '中午 12–14 点，晚上 18 点到第二天 9 点'
-              : scrollWindow === 'evening' ? '晚上 18 点到 23 点'
-                : '00:00 到 23:59，白天也刷（会占电脑）',
-          }),
           h(Seg, {
             label: '怎么摊开',
             value: scrollSpread,
             onChange: setScrollSpread,
             options: [{ v: 'spread', t: '摊开刷' }, { v: 'burst', t: '一次刷完' }],
             hint: scrollSpread === 'burst'
-              ? '到时间段开头，一口气把几条刷完'
-              : '把条数摊在这段时间里，每段随机挑一个时刻（像人一样，不会挤在一起）',
+              ? '一口气把几条刷完'
+              : '把条数摊在机器醒着的时间里，每段随机挑一个时刻（像人一样，不会挤在一起）',
           }),
           h(Seg, {
             label: '每天几条',
@@ -704,6 +685,8 @@ window.__ModuleLoader__.load({
             options: [{ v: 'on', t: '要写' }, { v: 'off', t: '不写' }],
             hint: writeReport ? '每天存一份文本文件，记事本能打开' : '不生成文件（默认）',
           }),
+          h('div', { style: { fontSize: 11.5, color: C.text3, lineHeight: '18px', padding: '2px 0 4px' } },
+            '什么时候刷都行，摊在你电脑开着的时间里。真要限定只在某个时段，去设置页「自动刷视频」里调 —— 那边能选到分、能加多段。'),
         ))
       }
       if (step === 8) {

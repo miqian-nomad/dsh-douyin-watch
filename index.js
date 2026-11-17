@@ -1814,6 +1814,7 @@ export function apply(ctx, config) {
     const cur = now.getHours() * 60 + now.getMinutes()
     const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : NaN }
     const wins = Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []
+    if (!wins.length) return true     // 没配时段 = 不限（真正的限制交给时刻表：一天几条、摊开刷）
     for (const w of wins) {
       const parts = String(w).split('-')
       if (parts.length !== 2) continue
@@ -1839,7 +1840,8 @@ export function apply(ctx, config) {
   /** 按"圈出来的时间段"生成今天的时刻表；'burst' = 一次刷完（压在区域开头） */
   function buildSlotTimes(perDay) {
     const wins = (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).filter(Boolean)
-    const w = wins[0] || '12:00-14:00'
+    // 没配时间段 = 摊在「机器醒着的时间」9 点到 23 点。一天才几条，不必圈死在几个钟点里。
+    const w = wins[0] || '09:00-23:00'
     const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : 0 }
     const parts = String(w).split('-')
     const a = toMin(parts[0]); const b = toMin(parts[1])

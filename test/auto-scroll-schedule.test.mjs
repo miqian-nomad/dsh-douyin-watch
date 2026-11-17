@@ -48,3 +48,10 @@ test('第 7 步能选"怎么摊开"', () => {
   assert.match(UI, /t: '摊开刷' \}, \{ v: 'burst', t: '一次刷完'/, '两个选项都要在')
   assert.match(UI, /autoScrollSpread: scrollSpread === 'burst' \? 'burst' : 'spread'/, '完成时要写进去')
 })
+
+test('引导页不再自己编时间段（跟设置页只留一套）', () => {
+  assert.equal(/中午晚上/.test(UI), false, '引导页不许再出现「中午晚上」这种自编预设')
+  assert.equal(/全天都行/.test(UI), false, '引导页不许再出现「全天都行」这种自编预设')
+  assert.match(SRC, /const w = wins\[0\] \|\| '09:00-23:00'/, '没配时段时摊在 9 点到 23 点')
+  assert.match(SRC, /if \(!wins\.length\) return true/, '没配时段不该永远不跑')
+})
