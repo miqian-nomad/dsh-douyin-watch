@@ -317,6 +317,8 @@ window.__ModuleLoader__.load({
       const [intervalSec, setIntervalSec] = useState(Number(cfg.intervalSeconds) || 30)
       const [scrollOn, setScrollOn] = useState(!!cfg.autoScrollEnabled)
       const [scrollPerDay, setScrollPerDay] = useState(Number(cfg.autoScrollPerDay) || 0)
+      // 2026-11-17：这几条怎么摊在时间段里（摊开 = 每段随机一个时刻，像人；一次刷完 = 全压在开头）
+      const [scrollSpread, setScrollSpread] = useState(cfg.autoScrollSpread === 'burst' ? 'burst' : 'spread')
       // 刷视频那几个（2026-11-17 主人说"这一步内容太少"，把该有的都摆出来）
       const WIN_PRESETS = {
         midnight: ['12:00-14:00', '18:00-09:00'],
@@ -440,6 +442,7 @@ window.__ModuleLoader__.load({
             autoScrollWindows: (winTouched || !(Array.isArray(cfg.autoScrollWindows) && cfg.autoScrollWindows.length))
               ? (WIN_PRESETS[scrollWindow] || WIN_PRESETS.midnight)
               : cfg.autoScrollWindows,
+            autoScrollSpread: scrollSpread === 'burst' ? 'burst' : 'spread',
             autoScrollDeliverDm: !!deliverDm,
             autoScrollWriteReport: !!writeReport,
           } : {}),
@@ -664,6 +667,15 @@ window.__ModuleLoader__.load({
             hint: scrollWindow === 'midnight' ? '中午 12–14 点，晚上 18 点到第二天 9 点'
               : scrollWindow === 'evening' ? '晚上 18 点到 23 点'
                 : '00:00 到 23:59，白天也刷（会占电脑）',
+          }))
+          body.push(h(Seg, {
+            label: '怎么摊开',
+            value: scrollSpread,
+            onChange: setScrollSpread,
+            options: [{ v: 'spread', t: '摊开刷' }, { v: 'burst', t: '一次刷完' }],
+            hint: scrollSpread === 'burst'
+              ? '到时间段开头，一口气把几条刷完'
+              : '把条数摊在这段时间里，每段随机挑一个时刻（像人一样，不会挤在一起）',
           }))
           body.push(h(Seg, {
             label: '每天几条',

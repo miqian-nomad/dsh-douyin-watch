@@ -185,6 +185,9 @@ const DEFAULTS = {
   autoScrollEnabled: false, // 总开关：关掉就完全不跑
   autoScrollWindows: ['12:00-14:00', '18:00-09:00'], // 自动跑的时间段，可增删
   autoScrollPerDay: 5, // 每天最多挑几条（0 = 不跑）
+  // 2026-11-17：这几条怎么摊在时间段里。'spread'（默认）= 均匀摊开、每段随机一个时刻；
+  //   'burst' = 一次刷完（全压在时间段开头）。以前是"凑够就一口气刷完"，不像人。
+  autoScrollSpread: 'spread',
   autoScrollDeliverDm: true, // 结果私信发主人
   autoScrollWriteReport: false, // 写 Markdown 日报文件
   autoScrollReportDir: '', // 日报目录（空 = 当前工作区）
@@ -437,7 +440,7 @@ export function apply(ctx, config) {
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
   // 2026-11-07：补上 peer / owner —— 这两个是「要盯的会话昵称」和「主人昵称」，
   //   以前根本不在白名单里，设置页就算发上来也会被写盘循环丢掉（issue #1 的根因）。
-  const TOGGLE_KEYS = ['enabled', 'peer', 'owner', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaPreset', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir', 'subtitleOcr', 'shareCardMode', 'imageMode', 'probeHours', 'onboarded']
+  const TOGGLE_KEYS = ['enabled', 'peer', 'owner', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaPreset', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollSpread', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir', 'subtitleOcr', 'shareCardMode', 'imageMode', 'probeHours', 'onboarded']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -1823,9 +1826,56 @@ export function apply(ctx, config) {
     return false
   }
 
+  // ── 2026-11-17：刷视频的"时刻表"（主人要求）────────────────────────────
+  //   以前：落在时间段里，每 60 秒看一次，凑够条数就一口气刷完 —— 5 条挤在同一刻，像脚本。
+  //   现在：先圈一段时间，再把 N 条摊开，每段里随机挑一个时刻，一天按点去刷。
+  //   例：18:00–23:00、5 条 → 18:47 / 19:26 / 20:05 / 21:38 / 22:51 各刷一条。
+  function todayKeyLocal() { return new Date().toISOString().slice(0, 10) }
+  const schedFile = () => join(HOME, 'pick-sched.json')
+  function readSched() {
+    try { const j = JSON.parse(readFileSync(schedFile(), 'utf8')); return (j && j.date) ? j : null } catch { return null }
+  }
+  function writeSched(s) { try { writeFileSync(schedFile(), JSON.stringify(s, null, 2)) } catch { /* 写不了不影响这一轮 */ } }
+  /** 按"圈出来的时间段"生成今天的时刻表；'burst' = 一次刷完（压在区域开头） */
+  function buildSlotTimes(perDay) {
+    const wins = (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).filter(Boolean)
+    const w = wins[0] || '12:00-14:00'
+    const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : 0 }
+    const parts = String(w).split('-')
+    const a = toMin(parts[0]); const b = toMin(parts[1])
+    const span = b > a ? b - a : 24 * 60 - a + b     // 支持跨零点
+    const base = new Date(); base.setHours(0, 0, 0, 0)
+    const n = Math.max(1, perDay)
+    if (String(cfg.autoScrollSpread || 'spread') === 'burst') {
+      return [base.getTime() + (a + 10) * 60000]
+    }
+    const seg = span / n
+    const out = []
+    for (let i = 0; i < n; i++) {
+      out.push(Math.round(base.getTime() + (a + i * seg + Math.random() * seg) * 60000))
+    }
+    return out.sort((x, y) => x - y)
+  }
+  /** 到点该跑的那一条；没到点返回 null */
+  function dueSlot(perDay) {
+    let s = readSched()
+    if (!s || s.date !== todayKeyLocal() || !Array.isArray(s.slots) || !s.slots.length || s.slots.length !== Math.max(1, perDay)) {
+      s = { date: todayKeyLocal(), slots: buildSlotTimes(perDay).map((at) => ({ at, done: false })) }
+      writeSched(s)
+      log('自动刷：今天的时刻表 ' + s.slots.map((x) => new Date(x.at).toTimeString().slice(0, 5)).join(' / '))
+    }
+    const now = Date.now()
+    return s.slots.find((x) => !x.done && x.at <= now) || null
+  }
+  function markSlotDone(at) {
+    const s = readSched()
+    if (!s || !Array.isArray(s.slots)) return
+    for (const x of s.slots) if (x.at === at) x.done = true
+    writeSched(s)
+  }
+
   /** 今天的配额状态 */
-  function readPickerState() {
-    try {
+  function readPickerState() {    try {
       if (!existsSync(cfg.pickerStateFile)) return { date: '', count: 0 }
       const j = JSON.parse(readFileSync(cfg.pickerStateFile, 'utf8'))
       const today = new Date().toISOString().slice(0, 10)
@@ -3052,6 +3102,11 @@ export function apply(ctx, config) {
       const perDay = Number(cfg.autoScrollPerDay || 0)
       if (!perDay) return
       if (st.count >= perDay) return
+      // 2026-11-17：到点了才刷（先圈时间、再摊开），不再"一开跑就五条连刷"
+      const due = dueSlot(perDay)
+      if (!due) return
+      const burstRun = String(cfg.autoScrollSpread || 'spread') === 'burst'
+      const runLimit = burstRun ? Math.max(1, perDay - st.count) : 1
       const target = [...watched.keys()][0]
       if (!target) return
       busy = true
@@ -3060,13 +3115,13 @@ export function apply(ctx, config) {
         pauseWatcher()
         let r
         try {
-          r = await runPicker(Math.min(perDay, 5))
+          r = await runPicker(Math.min(perDay, Math.max(1, runLimit)))
         } finally {
           resumeWatcher()
         }
         if (!r.ok) { log('自动刷：取候选失败 n=' + (r.items ? r.items.length : 0) + ' err=' + (r.error || '-') + ' raw=' + (r.raw || '-')); return }
         log('自动刷：取到 ' + r.items.length + ' 条候选')
-        const picked = r.items.slice(0, perDay)
+        const picked = r.items.slice(0, Math.max(1, Math.min(perDay - st.count, burstRun ? runLimit : 1)))
         const body = picked.map((it) => `${it.idx}. [${it.hot}] ${it.desc.slice(0, 60)}\n   ${it.url}`).join('\n\n')
         if (cfg.autoScrollDeliverDm) {
           const sr = await sendChatText(target, `今天给你挑了 ${picked.length} 条：\n\n${body}`)
@@ -3083,6 +3138,7 @@ export function apply(ctx, config) {
           } catch (e) { log('自动刷：写日报失败 ' + (e && e.message)) }
         }
         writePickerState(st.count + picked.length)
+        markSlotDone(due.at)     // 这一格刷过了，下一格到点再刷
         log(`自动刷完成：${picked.length} 条（今天累计 ${st.count + picked.length}/${perDay}）`)
       } catch (e) {
         log('自动刷失败：' + (e && e.message))
