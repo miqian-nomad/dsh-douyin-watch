@@ -657,19 +657,19 @@ window.__ModuleLoader__.load({
             onChange: setScrollSpread,
             options: [{ v: 'spread', t: '摊开刷' }, { v: 'burst', t: '一次刷完' }],
             hint: scrollSpread === 'burst'
-              ? '一口气把几条刷完'
-              : '把条数摊在机器醒着的时间里，每段随机挑一个时刻（像人一样，不会挤在一起）',
+              ? '几条连着刷完，中间几乎不隔'
+              : '每条之间随机隔 5～20 分钟；条数多就自然摊更久',
           }),
           h(Seg, {
             label: '每天几条',
             value: String(scrollPerDay || 5),
             onChange: (v) => setScrollPerDay(Number(v)),
             options: withCurrent(
-              [{ v: '3', t: '3 条' }, { v: '5', t: '5 条' }, { v: '10', t: '10 条' }],
+              [{ v: '3', t: '3 条' }, { v: '5', t: '5 条' }, { v: '10', t: '10 条' }, { v: '20', t: '20 条' }],
               String(scrollPerDay || 5),
               (c) => c + ' 条',
             ),
-            hint: '一天最多挑这么多条看',
+            hint: '一天最多刷几条，刷到这个数就停',
           }),
           h(Seg, {
             label: '刷完告诉我',
@@ -686,7 +686,7 @@ window.__ModuleLoader__.load({
             hint: writeReport ? '每天存一份文本文件，记事本能打开' : '不生成文件（默认）',
           }),
           h('div', { style: { fontSize: 11.5, color: C.text3, lineHeight: '18px', padding: '2px 0 4px' } },
-            '什么时候刷都行，摊在你电脑开着的时间里。真要限定只在某个时段，去设置页「自动刷视频」里调 —— 那边能选到分、能加多段。'),
+            '没设时段就跟着开机走：开机后随机等 10～30 分钟开始，之后每条之间随机隔 5～20 分钟。要限定只在某个时段，去设置页「自动刷视频」里调。'),
         ))
       }
       if (step === 8) {

@@ -1837,26 +1837,51 @@ export function apply(ctx, config) {
     try { const j = JSON.parse(readFileSync(schedFile(), 'utf8')); return (j && j.date) ? j : null } catch { return null }
   }
   function writeSched(s) { try { writeFileSync(schedFile(), JSON.stringify(s, null, 2)) } catch { /* 写不了不影响这一轮 */ } }
-  /** 按"圈出来的时间段"生成今天的时刻表；'burst' = 一次刷完（压在区域开头） */
-  function buildSlotTimes(perDay) {
-    const wins = (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).filter(Boolean)
-    // 没配时间段 = 摊在「机器醒着的时间」9 点到 23 点。一天才几条，不必圈死在几个钟点里。
-    const w = wins[0] || '09:00-23:00'
-    const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : 0 }
-    const parts = String(w).split('-')
-    const a = toMin(parts[0]); const b = toMin(parts[1])
-    const span = b > a ? b - a : 24 * 60 - a + b     // 支持跨零点
+  /** 配了时间段时：现在在段里就"再等 5~20 分钟"，不在就排到下个时段的开头 */
+  function nextWindowStart(wins) {
+    const toMin = (s) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : null }
+    const now = new Date()
+    const curMin = now.getHours() * 60 + now.getMinutes()
     const base = new Date(); base.setHours(0, 0, 0, 0)
+    let best = null
+    for (const w of wins) {
+      const p = String(w).split('-')
+      const a = toMin(p[0]); const b = toMin(p[1])
+      if (a == null || b == null) continue
+      const inside = (a <= b) ? (curMin >= a && curMin < b) : (curMin >= a || curMin < b)
+      let at
+      if (inside) at = Date.now() + (5 + Math.random() * 15) * 60000
+      else {
+        const startMin = (curMin >= a) ? a + 24 * 60 : a
+        at = base.getTime() + startMin * 60000 + Math.random() * 5 * 60000
+      }
+      if (best == null || at < best) best = at
+    }
+    return best
+  }
+
+  /**
+   * 今天的时刻表（2026-11-17 主人拍板的规则）：
+   *   ① 上限：一天最多刷几条（用户自己填）—— 生成几条就几条，刷满就停。
+   *   ② 起点：没配时段 = 开机后随机等 10~30 分钟；配了时段 = 时段里/下个时段的开头。
+   *   ③ 间隔：每条之间随机 5~20 分钟（下限 5 分钟，上限 20 分钟，中间每次重抽）。
+   *   ④ 条数多就自然摊更久：30 条 ≈ 3~10 小时，不会被压成每 2 分钟一条。
+   *   ⑤ 'burst'（一次刷完）= 紧接着连刷，不隔。
+   */
+  function buildSlotTimes(perDay) {
     const n = Math.max(1, perDay)
-    if (String(cfg.autoScrollSpread || 'spread') === 'burst') {
-      return [base.getTime() + (a + 10) * 60000]
+    const wins = (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).filter(Boolean)
+    const burst = String(cfg.autoScrollSpread || 'spread') === 'burst'
+    const MIN = 5 * 60000
+    const MAX = 20 * 60000
+    let t = wins.length ? nextWindowStart(wins) : null
+    if (t == null) t = Date.now() + (10 + Math.random() * 20) * 60000   // 跟着开机：先等 10~30 分钟
+    const out = [Math.round(t)]
+    for (let i = 1; i < n; i++) {
+      t += burst ? 2 * 60000 : (MIN + Math.random() * (MAX - MIN))
+      out.push(Math.round(t))
     }
-    const seg = span / n
-    const out = []
-    for (let i = 0; i < n; i++) {
-      out.push(Math.round(base.getTime() + (a + i * seg + Math.random() * seg) * 60000))
-    }
-    return out.sort((x, y) => x - y)
+    return out
   }
   /** 到点该跑的那一条；没到点返回 null */
   function dueSlot(perDay) {
@@ -1867,6 +1892,12 @@ export function apply(ctx, config) {
       log('自动刷：今天的时刻表 ' + s.slots.map((x) => new Date(x.at).toTimeString().slice(0, 5)).join(' / '))
     }
     const now = Date.now()
+    // 错过的那一格不补：超过 60 分钟还没刷的，直接作废（主人：关机就停，不补）
+    let changed = false
+    for (const x of s.slots) {
+      if (!x.done && now - x.at > 60 * 60000) { x.done = true; changed = true }
+    }
+    if (changed) writeSched(s)
     return s.slots.find((x) => !x.done && x.at <= now) || null
   }
   function markSlotDone(at) {
