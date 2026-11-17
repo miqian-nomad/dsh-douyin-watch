@@ -172,35 +172,34 @@ window.__ModuleLoader__.load({
 
     // ── 分段条（2026-11-17 主人选定）────────────────────────────────────────
     //   主人把别的选法全否了（一排小按钮 / 滑条 / 滑轨 / 整行打勾 / 聊天式 / 开关），
-    //   在一页真样本里挑了 B「分段条」：细长一根、选中的那段填色。
-    //   他的两条硬要求：
-    //     ① 标签统一四字，不许"一会儿一个字、一会儿两个字"；
-    //     ② 每一项都配一句人话解释（只提醒→改成「只看不回」这种，别让词自己猜）。
+    //   在一页真样本里挑了 B「分段条」。
+    //   2026-11-17 第二版（他看着第一版说「不喜欢」）：第一版是"左边标签、右边小胶囊"，
+    //   中间又空出一大片，跟设置页那个毛病一模一样。现在改成：标签在上、分段条整行铺满、
+    //   每段等宽 —— 一眼看过去是一整块，不是角落里挂着一个小胶囊。
+    //   他还有两条硬要求：标签统一四字；每项配一句人话解释。
     //   选中色用固定品牌蓝：主题变量在深色下是近白，白字会看不见。
     const SEG_ACCENT = '#4d6bfe';
     function Seg({ label, hint, value, options, onChange }) {
-      return h('div', { style: { padding: '9px 0' } },
-        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 } },
-          h('div', { style: { fontSize: 13.5, color: C.text, flex: '0 0 auto' } }, label),
-          h('div', {
-            style: {
-              display: 'inline-flex', background: 'rgba(127,127,127,0.12)',
-              borderRadius: 10, padding: 3, gap: 2, flex: '0 0 auto',
-            },
+      return h('div', { style: { padding: '10px 0 12px' } },
+        h('div', { style: { fontSize: 13.5, color: C.text, marginBottom: 7 } }, label),
+        h('div', {
+          style: {
+            display: 'flex', background: 'rgba(127,127,127,0.12)',
+            borderRadius: 10, padding: 3, gap: 3, width: '100%',
           },
-            ...options.map((o) => h('button', {
-              key: o.v, type: 'button', onClick: () => onChange(o.v),
-              style: {
-                minWidth: 86, padding: '5px 10px', borderRadius: 8, border: 'none',
-                fontSize: 12.5, fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap',
-                background: value === o.v ? SEG_ACCENT : 'transparent',
-                color: value === o.v ? '#fff' : C.text3,
-                fontWeight: value === o.v ? 600 : 400,
-                transition: 'background .15s ease, color .15s ease',
-              },
-            }, o.t))),
-        ),
-        hint ? h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 4, lineHeight: '18px' } }, hint) : null,
+        },
+          ...options.map((o) => h('button', {
+            key: o.v, type: 'button', onClick: () => onChange(o.v),
+            style: {
+              flex: '1 1 0', padding: '7px 8px', borderRadius: 8, border: 'none',
+              fontSize: 13, fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap',
+              background: value === o.v ? SEG_ACCENT : 'transparent',
+              color: value === o.v ? '#fff' : C.text3,
+              fontWeight: value === o.v ? 600 : 400,
+              transition: 'background .15s ease, color .15s ease',
+            },
+          }, o.t))),
+        hint ? h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 6, lineHeight: '18px' } }, hint) : null,
       );
     }
 
@@ -615,7 +614,6 @@ window.__ModuleLoader__.load({
           ),
           hint: intervalSec <= 20 ? '最及时，也最费电脑' : (intervalSec >= 60 ? '省电脑，提醒会慢一点' : '折中'),
         }))
-        body.push(h(WizStatus, { state: status[6], text: msg[6], dark }))
       }
       if (step === 7) {
         // 刷视频单独一步（主人：不能笼统混为一起）
@@ -641,7 +639,6 @@ window.__ModuleLoader__.load({
           body.push(h('div', { style: { fontSize: 11.5, color: C.text3, lineHeight: '18px', padding: '6px 0' } },
             '什么时候刷先用现在配着的时间段。要改时间段、要不要私信告诉你、要不要写日报，去设置页「自动刷视频」。'))
         }
-        body.push(h(WizStatus, { state: status[7], text: msg[7], dark }))
       }
       if (step === 8) {
         // 评论区单独一步
@@ -686,7 +683,6 @@ window.__ModuleLoader__.load({
                   style: Object.assign({}, btnBase, { cursor: 'pointer' }),
                 }, '就这样，只守着')))
         }
-        body.push(h(WizStatus, { state: status[8], text: msg[8], dark }))
       }
       if (step === STEP_MAX) {
         const list = Array.isArray(checks) ? checks : []
