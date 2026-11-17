@@ -1212,6 +1212,20 @@ window.__ModuleLoader__.load({
               + '代价：很费电脑 CPU，一条 2 分钟视频要多等约 5 分钟，这期间你电脑会明显变慢。'
               + '只有需要逐字引用台词、或画面有字但没人念的时候才开。',
           }, h(Switch, { checked: !!cfg.subtitleOcr, onChange: (v) => save({ subtitleOcr: v }) })),
+          h(Row, {
+            label: '收到视频分享卡片',
+            hint: '你私信里转一条视频给它时怎么办。'
+              + '「只当话题聊」= 它跟着聊，不下载、不转写，你说要分析才动手（默认）。'
+              + '「自动分析」= 每条都先转文字、抽画面拼图，再照内容回你。',
+          },
+            h('select', {
+              value: cfg.shareCardMode || 'chat',
+              onChange: (e) => save({ shareCardMode: e.target.value }),
+              style: Object.assign({}, ctlBase, { width: 220 }),
+            }, [
+              h('option', { key: 'chat', value: 'chat' }, '只当话题聊（默认）'),
+              h('option', { key: 'analyze', value: 'analyze' }, '自动分析再看'),
+            ])),
         ),
         h(Card, { title: '人设', anchor: 'persona' },
           h(Row, { label: '当前人设', hint: '人设只影响这个 Bot 回话的语气和称呼，不会把这段文字发给对方；换完下一条消息就生效，不用重启' },
