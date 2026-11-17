@@ -146,6 +146,17 @@ try {
       ...ocrArgs,
     ]
   const pr = await run(py, pargs, 8 * 60 * 1000)
+  // 机器上压根没有 Python 时，spawn 会直接失败，别把 ENOENT 抛给用户看
+  if (pr.err && /ENOENT|not found|不是内部或外部命令/i.test(String(pr.err.message || pr.err.code || ''))) {
+    out({
+      ok: false,
+      aweme_id: AWEME,
+      steps,
+      error: '本机找不到 Python，视频分析要用它。装一个 Python 3.10 以上就行（装完重开 DSH），'
+        + '或者设 DOUYIN_PYTHON 指向已有的 python.exe。',
+    })
+    process.exit(1)
+  }
   const res = pickJSON(pr.stdout)
   steps.asr = res
     ? {
