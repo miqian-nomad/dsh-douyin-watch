@@ -101,7 +101,8 @@ test('界面：提示文案 + 「去重新引导」按钮，常驻入口「重�
 
 test('界面：向导页里也有「重新引导」入口（重新开始，只清界面状态）', () => {
   assert.match(CLIENT, /const restartWizard = \(\) => \{/, '向导页要有重新开始的入口函数')
-  assert.match(CLIENT, /setStep\(1\); setWarn\(''\); setStatus\(\{\}\); setMsg\(\{\}\)/, '重新开始 = 回到第 1 步并清掉检测状态')
+  // 2026-11-17：改成回到「现状种子」（已配好的步骤仍是灰勾），别把主人已经弄好的东西又变回未检测。
+  assert.match(CLIENT, /setStep\(1\); setWarn\(''\); setStatus\(seedStatus\); setMsg\(seedMsg\)/, '重新开始 = 回到第 1 步，但保留现状灰勾')
   assert.match(CLIENT, /\}, '重新开始'\)\)/, '向导页顶部要看得见这个按钮')
 })
 
