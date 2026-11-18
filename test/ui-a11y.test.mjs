@@ -34,21 +34,26 @@ test('① 焦点：ctlBase 不再吞掉 outline，焦点环只在键盘走时出
 test('② Row：标签是 label、点它能聚焦控件、右侧控件有可访问名称', () => {
   const i = U.indexOf('function Row({ label, hint, children })')
   assert.ok(i > 0, '找不到 Row')
-  const block = U.slice(i, i + 1600)
+  const block = U.slice(i, i + 2000)
   assert.match(block, /h\('label', \{/, '标签还是 div')
-  assert.match(block, /htmlFor: labelId/, 'label 没和控件关联')
   assert.match(block, /onClick: focusFirst/, '点标签不聚焦')
   assert.match(block, /role: 'group', 'aria-labelledby': labelId/, '右侧容器没有可访问名称')
   assert.match(block, /display: 'block'/, 'label 要按块级渲染，别改排版')
+  // 标签要有 id（被 aria-labelledby 引用），但**不许 htmlFor 指自己**
+  assert.match(block, /id: labelId/, '标签没 id，aria-labelledby 就指向空了')
+  assert.equal(/htmlFor:\s*labelId/.test(block), false, 'htmlFor 又指回 label 自己的 id 了（等于自己绑自己）')
 })
 
-test('③ 删时间段：有可访问名称，并且能撤销', () => {
+test('③ 删时间段：有可访问名称，并且能撤销（连删两行也留得住）', () => {
   assert.match(U, /'aria-label': '删掉这一段/, '− 按钮还是没有名字')
-  assert.match(U, /setUndoWin\(\{ row: r, index: i \}\)/, '删了没有留撤销信息')
+  assert.match(U, /items: \(prev && Array\.isArray\(prev\.items\) \? prev\.items : \[\]\)\.concat\(\[\{ row: r, index: i \}\]\)/, '连删时没有累加撤销信息')
   assert.match(U, /\}, '撤销'\)/, '没有撤销按钮')
   assert.match(U, /setTimeout\(\(\) => setUndoWin\(null\), 10000\)/, '撤销窗口要自己过期')
-  // 撤销要把原来那一行放回原位置
-  assert.match(U, /next\.splice\(at, 0, undoWin\.row\)/, '撤销没放回原位置')
+  // 连删两行：撤销条要说「已删掉 2 段」
+  assert.match(U, /已删掉 ' \+ undoWin\.items\.length \+ ' 段/, '连删两行时没说清删了几段')
+  // 撤销要按「后删的先放回」还原，位置才不颠倒
+  assert.match(U, /for \(let k = undoWin\.items\.length - 1; k >= 0; k--\)/, '撤销顺序不对（连删会颠倒）')
+  assert.match(U, /next\.splice\(at, 0, it\.row\)/, '撤销没把行放回去')
 })
 
 test('④ select：显式给背景色/字色，面板根按主题设 colorScheme', () => {

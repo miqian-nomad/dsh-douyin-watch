@@ -279,11 +279,16 @@ window.__ModuleLoader__.load({
     //   现在：标签是 <label>（样式同原来那个 div，排版不变），点它就聚焦到这一行的第一个控件；
     //   右侧容器带 role=group + aria-labelledby，读屏念控件时会先念这一行的名字。
     //   37 处 Row 都会自动受益，不用改调用方。
+    //   ⚠️ 这里故意**不写 htmlFor**：控件是调用方传进来的，Row 拿不到它的 id；
+    //      要是硬把 htmlFor 指到 label 自己的 id 上，那是「自己绑自己」——浏览器认不到
+    //      可关联控件，等于撒了个谎（2026-11-18 MOSS 挑出来的）。聚焦靠 onClick。
     let dyRowSeq = 0
     function Row({ label, hint, children }) {
       const labelId = React.useMemo(() => 'dy-row-' + (++dyRowSeq), [])
       const boxRef = React.useRef(null)
       const focusFirst = (e) => {
+        // 没有 for 的 <label> 本身没有默认行为，preventDefault 只是防御：
+        //   万一将来这里真的绑上了一个原生 for，别让原生聚焦和手动 focus 打架。
         if (e) e.preventDefault()
         const box = boxRef.current
         if (!box || typeof box.querySelector !== 'function') return
@@ -298,7 +303,7 @@ window.__ModuleLoader__.load({
       },
         h('div', { style: { minWidth: 0 } },
           h('label', {
-            id: labelId, htmlFor: labelId, onClick: focusFirst,
+            id: labelId, onClick: focusFirst,
             style: { display: 'block', fontSize: 13, color: C.text, lineHeight: '20px', cursor: 'pointer' },
           }, label),
           hint ? h('div', { style: { fontSize: 12, color: C.text3, lineHeight: '18px' } }, hint) : null,
@@ -1003,7 +1008,7 @@ window.__ModuleLoader__.load({
       const [advOpen, setAdvOpen] = useState(false);
       // 2026-11-18：删时间段要留退路（主人以前就因为没退路误删过 self.json）。
       //   删了不弹窗确认，改成「先删掉 + 10 秒内可撤销」，撤销把原位置那一行放回去。
-      const [undoWin, setUndoWin] = useState(null);   // { row, index }
+      const [undoWin, setUndoWin] = useState(null);   // { items: [{ row, index }, …] }
       useEffect(() => {
         if (!undoWin) return undefined;
         const t = setTimeout(() => setUndoWin(null), 10000);
@@ -1597,7 +1602,13 @@ window.__ModuleLoader__.load({
                   // 2026-11-18：纯图标按钮给了可访问名称；删掉改成「可撤销」而不是弹窗
                   'aria-label': '删掉这一段（' + (r.start && r.end ? (r.start + ' 到 ' + r.end) : '还没填时间') + '，10 秒内可撤销）',
                   title: '删掉这一段（10 秒内可撤销）',
-                  onClick: () => { commit(rows.filter((_, j) => j !== i)); setUndoWin({ row: r, index: i }); },
+                  onClick: () => {
+                    commit(rows.filter((_, j) => j !== i));
+                    // 2026-11-18：连删多行时累加，别让前一条悄悄没了
+                    setUndoWin((prev) => ({
+                      items: (prev && Array.isArray(prev.items) ? prev.items : []).concat([{ row: r, index: i }]),
+                    }));
+                  },
                   style: Object.assign({}, ctlBase, { width: 32, cursor: 'pointer', color: C.text2 }),
                 }, '−'),
               )),
@@ -1607,19 +1618,25 @@ window.__ModuleLoader__.load({
                 style: Object.assign({}, ctlBase, { marginTop: 2, width: 'auto', alignSelf: 'flex-start', padding: '0 12px', cursor: 'pointer', color: C.text2 }),
               }, '+ 添加时间段'),
               // 删除后的撤销条：10 秒后自己消失（时间到由上面的 useEffect 清）
-              undoWin ? h('div', {
+              undoWin && Array.isArray(undoWin.items) && undoWin.items.length ? h('div', {
                 style: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: C.text3, marginTop: 2 },
               },
-                h('span', null, '已删掉 '
-                  + (undoWin.row && undoWin.row.start && undoWin.row.end
-                    ? (undoWin.row.start + ' 到 ' + undoWin.row.end)
-                    : '那一段') + ' 这段'),
+                h('span', null, undoWin.items.length > 1
+                  ? ('已删掉 ' + undoWin.items.length + ' 段')
+                  : ('已删掉 ' + (undoWin.items[0].row && undoWin.items[0].row.start && undoWin.items[0].row.end
+                    ? (undoWin.items[0].row.start + ' 到 ' + undoWin.items[0].row.end)
+                    : '那一段') + ' 这段')),
                 h('button', {
                   type: 'button',
                   onClick: () => {
-                    const next = rows.slice();
-                    const at = Math.max(0, Math.min(Number(undoWin.index) || 0, next.length));
-                    next.splice(at, 0, undoWin.row);
+                    // 按「后删的先放回」的顺序还原：连删两行时位置才不会颠倒
+                    //   （[A,B,C] 删 B 再删 C → 先放 C 到 1，再放 B 到 1 = [A,B,C]）
+                    let next = rows.slice();
+                    for (let k = undoWin.items.length - 1; k >= 0; k--) {
+                      const it = undoWin.items[k];
+                      const at = Math.max(0, Math.min(Number(it.index) || 0, next.length));
+                      next.splice(at, 0, it.row);
+                    }
                     commit(next);
                     setUndoWin(null);
                   },
