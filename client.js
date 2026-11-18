@@ -1527,6 +1527,12 @@ window.__ModuleLoader__.load({
               h('option', { value: 'card' }, '视频卡片（默认）'),
               h('option', { value: 'text' }, '文字链接'),
             )),
+          // 2026-11-18：刷到之后叫醒它自己读一遍（转写＋抽帧），再跟你讲值不值得看
+          h(Row, {
+            label: '让它自己看一遍',
+            hint: '刷到之后叫醒 DSH 里那条对话，它自己转写＋抽几帧读一遍，再跟你说值不值得看。'
+              + '代价：每条要多跑一次模型，一天几条会多花点 token。',
+          }, h(Switch, { checked: cfg.autoScrollAgentRead !== false, onChange: (v) => save({ autoScrollAgentRead: v }) })),
         ),
 
         h(Card, { title: '日报（可选）' },
