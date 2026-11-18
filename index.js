@@ -3306,20 +3306,32 @@ export function apply(ctx, config) {
         // 2026-11-18（主人要「AI 自己看」）：卡片发完，把它叫醒，让它自己去读一遍再讲给主人。
         //   走 followup 主动投递，**不是**让它处理自己发的卡片 —— 那条是 from=me，哨兵只认对方发来的。
         if (cfg.autoScrollAgentRead) {
-          const tgtAgent = [...watched.values()][0]
+          const tgtAgent = target          // ⚠️ watched 的 key 才是 agent，value 是清理函数（我第一版取错了）
           const one = picked[0]
           if (!tgtAgent) log('自动刷：没盯着的对话，跳过「让它自己看」')
           else if (typeof tgtAgent.followup !== 'function') log('自动刷：这个对话没有 followup，跳过「让它自己看」')
           else if (!sessionRoute(tgtAgent)) log('自动刷：解析不到模型路由，跳过「让它自己看」')
           else if (!one) log('自动刷：这一轮没有可讲的条目，跳过「让它自己看」')
           else {
-            const prompt = '我刚从推荐流刷到这条，你去看一眼，再跟主人讲一句：\n'
-              + '标题：' + one.desc + '\n链接：' + one.url + '\n\n'
-              + '先用 douyin_analyze 把这条读过（转写 + 抽几帧画面），再用 douyin_send 发给主人：'
-              + '两三句话说清它讲了什么、值不值得看。别复述全文，别写小作文。'
+            // 素材由插件搬：先在本地转写（纯 CPU，不花 token），再把台词交给它判断。
+            //   它手上只有 read/send/comment/… 那 8 个工具，**没有** douyin_analyze，
+            //   所以只丢个链接给它，它只能凭标题瞎猜。
+            let say = ''
+            try {
+              const ar = await runNode(cfg.analyzeScript, ['--aweme', awemeIdOf(one.url)], 8 * 60 * 1000)
+              const ap = (ar && ar.parsed) || {}
+              if (ap.ok) say = String(ap.transcript || '').replace(/\s+/g, ' ').slice(0, 1500)
+              else log('自动刷：转写失败 ' + (ap.error || (ar.error && ar.error.message) || '-'))
+            } catch (e) { log('自动刷：转写出错 ' + ((e && e.message) || e)) }
+            const prompt = '我刚从推荐流刷到这条，你看看值不值得看，跟主人讲一句：\n'
+              + '标题：' + one.desc + '\n链接：' + one.url + '\n'
+              + (say
+                ? ('\n它的原话（本地转写，可能有错字）：\n' + say + '\n')
+                : '\n（这条没转出文字，只能凭标题判断，别编内容。）\n')
+              + '\n用 douyin_send 发给主人：两三句话说清它讲了什么、值不值得看。别复述全文，别写小作文。'
             try {
               tgtAgent.followup(makeUserMessage(prompt))
-              log('自动刷：已叫醒它自己看（followup）')
+              log('自动刷：已叫醒它自己看（followup' + (say ? '，带 ' + say.length + ' 字台词' : '，无台词') + '）')
             } catch (e) { log('自动刷：叫醒失败 ' + ((e && e.message) || e)) }
           }
         }
