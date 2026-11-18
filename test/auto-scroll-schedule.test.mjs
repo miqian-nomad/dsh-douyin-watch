@@ -17,6 +17,9 @@ import { fileURLToPath } from 'node:url'
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..')
 const SRC = readFileSync(join(ROOT, 'index.js'), 'utf8')
 const UI = readFileSync(join(ROOT, 'client.js'), 'utf8')
+// 2026-11-18：窗口摊点的数学搬进 lib/sched.mjs（为了能喂固定 now 做真值测试）。
+//   下面几条原来盯 index.js 的源码，现在改盯这个文件 —— 判据没变，只换了文件。
+const LIB = readFileSync(join(ROOT, 'lib', 'sched.mjs'), 'utf8')
 
 test('默认摊开刷；能写进配置白名单', () => {
   assert.match(SRC, /autoScrollSpread:\s*'spread'/, '默认值应该是摊开')
@@ -25,26 +28,28 @@ test('默认摊开刷；能写进配置白名单', () => {
 
 test('时刻表：两套算法分开（开机一套，按时间段一套）', () => {
   assert.match(SRC, /function buildSlotTimes/, '缺时刻表生成')
-  assert.match(SRC, /function expandWindows/, '要能把时间段展开成区间（支持跨零点）')
+  assert.match(SRC, /import \{[^}]*expandWindows[^}]*\} from '\.\/lib\/sched\.mjs'/, 'index.js 要用 lib 里的 expandWindows')
+  assert.match(LIB, /export function expandWindows/, '要能把时间段展开成区间（支持跨零点）')
+  assert.match(LIB, /e \+= DAY/, '跨零点要往后推一天')
   assert.match(SRC, /function dueSlot/, '缺"到点没有"的判断')
   assert.match(SRC, /function markSlotDone/, '刷完要把这一格标掉')
 })
 
 test('按时间段：段长 ÷ 条数 = 每格，每格随机取一个点（不套 5~20 分钟）', () => {
-  assert.match(SRC, /const g = left \/ k/, '要按剩余段长均分')
-  assert.match(SRC, /a \+ j \* g \+ Math\.random\(\) \* g/, '每格内随机取一点')
-  assert.match(SRC, /const cap = Math\.max\(1, Math\.floor\(left \/ 60000\)\)/, '段装不下就今天少排，不硬塞')
-  const i = SRC.indexOf('// ── ② 按时间段')
-  assert.ok(i > 0, '找不到「按时间段」那一段')
-  const winBlock = SRC.slice(i, SRC.indexOf('const schedSig', i))
+  assert.match(LIB, /const g = left \/ k/, '要按剩余段长均分')
+  assert.match(LIB, /a \+ j \* g \+ rand\(\) \* g/, '每格内随机取一点')
+  assert.match(LIB, /const cap = Math\.max\(1, Math\.floor\(left \/ 60000\)\)/, '段装不下就今天少排，不硬塞')
+  const i = LIB.indexOf('// ② 段内均分')
+  assert.ok(i > 0, '找不到「段内均分」那一段')
+  const winBlock = LIB.slice(i)
   assert.equal(/5 \* 60000/.test(winBlock), false, '按时间段不许再套 5~20 分钟那条')
 })
 
 test('每个时间段自己填几条，外面的「每天最多」管所有段', () => {
   assert.match(SRC, /autoScrollWindowPer:/, '要有「每段几条」的配置')
   assert.match(SRC, /TOGGLE_KEYS\s*=\s*\[[^\]]*'autoScrollWindowPer'/, '漏了白名单，设置页存不进去')
-  assert.match(SRC, /const spare = Math\.max\(0, n - asked\)/, '没填条数的段要用剩下的额度')
-  assert.match(SRC, /Math\.min\(s\.per, n - acc\)/, '各段加起来超了总上限就按时间先后截断')
+  assert.match(LIB, /const spare = Math\.max\(0, n - asked\)/, '没填条数的段要用剩下的额度')
+  assert.match(LIB, /Math\.min\(s\.per, n - acc\)/, '各段加起来超了总上限就按时间先后截断')
   assert.match(UI, /这段看/, '设置页每段后面要有「这段看几条」')
   assert.match(UI, /autoScrollWindowPer:/, '保存时要把每段条数一起写进去')
 })

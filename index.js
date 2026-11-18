@@ -70,6 +70,7 @@ import { classifyPageState, decideGate, gateAllows, gateExpired, gateText, GATE,
 import { resolveSelfIdentity, mergeLearned, normalizeStore, selfStatus } from './lib/self-identity.mjs'
 import { classifyCommentProbe, probeText as probeTextOf, PROBE } from './lib/comment-probe.mjs'
 import { PERSONA_PRESETS, personaById } from './lib/personas.mjs'
+import { localDateKey, expandWindows, planWindowSlots } from './lib/sched.mjs'
 import { listPersonas, resolvePersona, personaText, mutate as mutatePersonas, storePath } from './lib/persona-store.mjs'
 
 // 插件自身目录（用于定位 tools/ 里的脚本，让包自包含、不依赖外部路径）
@@ -1929,30 +1930,21 @@ export function apply(ctx, config) {
   //     ② 按时间段刷：上下界是用户给的 —— 段长 ÷ 条数 = 每格，每格随机取一个点，条条都在段内。
   //        例：22:40–23:00、5 条 → 每格 4 分钟 → 22:42 / 22:45 / 22:50 / 22:54 / 22:58。
   //        以前这里套了 ① 的「每条隔 5~20 分钟」，20 分钟的段里放不下 5 条，后 4 条全被甩到段外。
-  function todayKeyLocal() { return new Date().toISOString().slice(0, 10) }
+  // 2026-11-18（MOSS 批的时区修法）：「今天」按**本地日期**算。
+  //   原来这里是 new Date().toISOString().slice(0, 10) —— UTC 日期。
+  //   UTC+8 的用户在本地 00:00–08:00 之间 UTC 还停在昨天：配额到早上 8 点才重置、
+  //   昨晚的表也会跨夜接着用（跨夜后 60 分钟内会把昨晚的点补跑一次）。
+  //   名字保留（外面都在用），行为换成本地；实现在 lib/sched.mjs，好做真值测试。
+  function todayKeyLocal() { return localDateKey() }
   const schedFile = () => join(HOME, 'pick-sched.json')
   function readSched() {
     try { const j = JSON.parse(readFileSync(schedFile(), 'utf8')); return (j && j.date) ? j : null } catch { return null }
   }
   function writeSched(s) { try { writeFileSync(schedFile(), JSON.stringify(s, null, 2)) } catch { /* 写不了不影响这一轮 */ } }
 
-  /** 把 'HH:MM-HH:MM' 展开成今天的毫秒区间（支持跨零点，跨到明天），并带上「这段自己看几条」 */
-  function expandWindows(wins, pers) {
-    const base = new Date(); base.setHours(0, 0, 0, 0)
-    const dayStart = base.getTime()
-    const toMin = (s) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : null }
-    const out = []
-    for (let i = 0; i < wins.length; i++) {
-      const p = String(wins[i]).split('-')
-      const a = toMin(p[0]); const b = toMin(p[1])
-      if (a == null || b == null) continue
-      const s = dayStart + a * 60000
-      let e = dayStart + b * 60000
-      if (e <= s) e += 24 * 3600 * 1000     // 跨零点：18:00-09:00 这种
-      out.push({ s, e, per: Math.max(0, Number(pers[i]) || 0) })
-    }
-    return out.filter((x) => x.e > x.s).sort((x, y) => x.s - y.s)
-  }
+  // 2026-11-18：expandWindows 搬去 lib/sched.mjs（要能喂固定 now 做真值测试）。
+  //   行为不变：'HH:MM-HH:MM' → 今天 00:00 起算的毫秒区间，支持跨零点；
+  //   新增的只有「尾段」（昨天锚、now 还在里面时收一段，per 强制 0）。
 
   /**
    * 今天的时刻表。两层上限（2026-11-18 主人定）：
@@ -1991,43 +1983,11 @@ export function apply(ctx, config) {
     }
 
     // ── ② 按时间段：先定每段几条，再在段内均分 ──
-    const asked = segs.reduce((a, s) => a + s.per, 0)
-    const blanks = segs.filter((s) => !s.per)
-    const spare = Math.max(0, n - asked)
-    if (blanks.length && spare > 0) {
-      const lenAll = blanks.reduce((a, s) => a + (s.e - s.s), 0) || 1
-      for (const s of blanks) s.per = Math.max(0, Math.round(spare * ((s.e - s.s) / lenAll)))
-    }
-    let acc = 0
-    const plan = segs.map((s) => { const take = Math.max(0, Math.min(s.per, n - acc)); acc += take; return take })
-    const wantSum = plan.reduce((a, b) => a + b, 0)
-    if (!wantSum) return []              // 一条额度都没有，今天不排
-
-    const now = Date.now()
-    const hm = (ms) => new Date(ms).toTimeString().slice(0, 5)
-    const out = []
-    if (burst) {
-      // 一次刷完：全压在第一个还在的段的开头，每条隔 1~2 分钟
-      const idx = segs.findIndex((s, i) => plan[i] > 0 && s.e > now)
-      if (idx < 0) return []
-      let t = Math.max(segs[idx].s, now) + 60000
-      for (let i = 0; i < wantSum; i++) { out.push(Math.round(t)); t += 60000 + Math.random() * 60000 }
-      return out
-    }
-    for (let i = 0; i < segs.length; i++) {
-      const cnt = plan[i]
-      if (!cnt) continue
-      const seg = segs[i]
-      const a = Math.max(seg.s, now)
-      const left = seg.e - a
-      if (left <= 0) continue                       // 这段已经过去了
-      const cap = Math.max(1, Math.floor(left / 60000))   // 一格最少 1 分钟
-      const k = Math.min(cnt, cap)
-      if (k < cnt) log('自动刷：' + hm(seg.s) + '–' + hm(seg.e) + ' 这段只够摊 ' + k + ' 条（填了 ' + cnt + ' 条）')
-      const g = left / k
-      for (let j = 0; j < k; j++) out.push(Math.round(a + j * g + Math.random() * g))
-    }
-    return out
+    //   2026-11-18：算法搬进 lib/sched.mjs（planWindowSlots），这里只负责传 now 和打日志；
+    //   判据一个字没改：段长 ÷ 条数 = 每格，每格随机取一点；段装不下就少排，各段超天花板按时间先后截断。
+    const r = planWindowSlots(segs, n, Date.now(), burst)
+    for (const m of r.notes) log(m)
+    return r.slots
   }
   // 配置签名：改完时段/每段条数/总上限/方式，今天的表要跟着重排
   // 2026-11-18：规则本身改了（空时段 = 不刷）→ 版本号进签名。
@@ -2088,19 +2048,19 @@ export function apply(ctx, config) {
     writeSched(s)
   }
 
-  /** 今天的配额状态 */
+  /** 今天的配额状态（「今天」按本地日期算：2026-11-18 修，以前是 UTC，凌晨 8 点才归零） */
   function readPickerState() {    try {
       if (!existsSync(cfg.pickerStateFile)) return { date: '', count: 0 }
       const j = JSON.parse(readFileSync(cfg.pickerStateFile, 'utf8'))
-      const today = new Date().toISOString().slice(0, 10)
+      const today = localDateKey()
       if (j && j.date === today) return { date: today, count: Number(j.count || 0) }
       return { date: today, count: 0 }
-    } catch { return { date: new Date().toISOString().slice(0, 10), count: 0 } }
+    } catch { return { date: localDateKey(), count: 0 } }
   }
 
   function writePickerState(count) {
     try {
-      writeFileSync(cfg.pickerStateFile, JSON.stringify({ date: new Date().toISOString().slice(0, 10), count }, null, 2))
+      writeFileSync(cfg.pickerStateFile, JSON.stringify({ date: localDateKey(), count }, null, 2))
     } catch { /* ignore */ }
   }
 
@@ -3349,38 +3309,45 @@ export function apply(ctx, config) {
             else log('自动刷：转写失败 ' + (ap.error || (ar.error && ar.error.message) || '-'))
           } catch (e) { log('自动刷：转写出错 ' + ((e && e.message) || e)) }
         }
+        // 交付结果：'' 没走投递 / 'no-owner' 没认领 / 'ok' 至少送到了 / 'failed' 一条都没到
+        //   2026-11-18（MOSS 指出的口子）：没发出去还去叫醒 agent，等于让它对着一条主人根本没收到的东西讲话。
+        let deliver = ''
         if (cfg.autoScrollDeliverDm) {
           // 2026-11-18（陌生人视角复查）：没认领主人时 cfg.owner 是空串，往下走只会拿空昵称去分享/发私信，
           //   必然失败、还白启动一次浏览器。这里直接跳过并如实记日志 —— 不发任何东西（红线：没认领不对外动作）。
           if (!String(cfg.owner || '').trim()) {
+            deliver = 'no-owner'
             log('自动刷：还没认领主人，这次挑到的 ' + picked.length + ' 条不发私信（去首次引导第 4 步认领，或在设置里填「发给谁」）')
           } else {
-          // 2026-11-18（主人拍板）：结果默认发**视频分享卡片**（有封面、点开就能看），
-          //   卡片发失败或回读不到，才退回「文字 + 长链接」兜底。
-          const asCard = String(cfg.autoScrollDeliverAs || 'card') === 'card'
-          const failed = []
-          if (asCard) {
-            for (const it of picked) {
-              const aid = awemeIdOf(it.url)
-              if (!aid) { failed.push(it); log('自动刷：这条没解析出 aweme id，改发文字'); continue }
-              const shar = await shareCardTo(aid, cfg.owner)
-              const rb = shar.ok ? await readbackCard(cfg.owner, aid) : { ok: false, why: shar.error || '分享动作没执行' }
-              log('自动刷：卡片 ' + aid + ' ' + (shar.ok
-                ? ('已执行（' + (shar.evidence || '信号未知') + '），回读' + (rb.ok ? '确认到达 ' + rb.detail : '没找到（' + rb.why + '）'))
-                : ('分享失败（' + (shar.error || '未知') + '）')))
-              if (!rb.ok) failed.push(it)
+            // 2026-11-18（主人拍板）：结果默认发**视频分享卡片**（有封面、点开就能看），
+            //   卡片发失败或回读不到，才退回「文字 + 长链接」兜底。
+            const asCard = String(cfg.autoScrollDeliverAs || 'card') === 'card'
+            const failed = []
+            if (asCard) {
+              for (const it of picked) {
+                const aid = awemeIdOf(it.url)
+                if (!aid) { failed.push(it); log('自动刷：这条没解析出 aweme id，改发文字'); continue }
+                const shar = await shareCardTo(aid, cfg.owner)
+                const rb = shar.ok ? await readbackCard(cfg.owner, aid) : { ok: false, why: shar.error || '分享动作没执行' }
+                log('自动刷：卡片 ' + aid + ' ' + (shar.ok
+                  ? ('已执行（' + (shar.evidence || '信号未知') + '），回读' + (rb.ok ? '确认到达 ' + rb.detail : '没找到（' + rb.why + '）'))
+                  : ('分享失败（' + (shar.error || '未知') + '）')))
+                if (!rb.ok) failed.push(it)
+              }
+            } else {
+              failed.push(...picked)
             }
-          } else {
-            failed.push(...picked)
-          }
-          if (failed.length) {
-            const fbody = failed.map((it) => `${it.idx}. [${it.hot}] ${it.desc.slice(0, 60)}\n   ${it.url}`).join('\n\n')
-            const head = asCard
-              ? ('有 ' + failed.length + ' 条卡片没发出去，先发链接给你：\n\n' + fbody)
-              : ('今天给你挑了 ' + failed.length + ' 条：\n\n' + fbody)
-            const sr = await sendChatText(target, head)
-            log('自动刷：文字私信 ' + (!sr.ok ? '发送失败（' + (sr.error || 'im-send 报错') + '）' : (sr.readback ? '已回读确认发出' : '已执行但回读没找到（可能被风控吞）')))
-          }
+            if (failed.length) {
+              const fbody = failed.map((it) => `${it.idx}. [${it.hot}] ${it.desc.slice(0, 60)}\n   ${it.url}`).join('\n\n')
+              const head = asCard
+                ? ('有 ' + failed.length + ' 条卡片没发出去，先发链接给你：\n\n' + fbody)
+                : ('今天给你挑了 ' + failed.length + ' 条：\n\n' + fbody)
+              const sr = await sendChatText(target, head)
+              deliver = sr.ok ? 'ok' : 'failed'
+              log('自动刷：文字私信 ' + (!sr.ok ? '发送失败（' + (sr.error || 'im-send 报错') + '）' : (sr.readback ? '已回读确认发出' : '已执行但回读没找到（可能被风控吞）')))
+            } else {
+              deliver = 'ok'
+            }
           }
         }
         // 2026-11-18（主人要「AI 自己看」）：卡片发完，把它叫醒，让它自己去读一遍再讲给主人。
@@ -3389,12 +3356,21 @@ export function apply(ctx, config) {
           const tgtAgent = target          // ⚠️ watched 的 key 才是 agent，value 是清理函数（我第一版取错了）
           const one = picked[0]
           if (!tgtAgent) log('自动刷：没盯着的对话，跳过「让它自己看」')
+          else if (deliver === 'no-owner') log('自动刷：没认领主人、东西没发出去，跳过「让它自己看」')
+          // 2026-11-18：设置里关了「刷完发私信」= 主人说了别打扰，这时去叫醒 agent，
+          //   它下一句就是 douyin_send —— 等于绕过这个开关。所以这时也不叫醒。
+          else if (!deliver) log('自动刷：设置里关了「刷完发私信」，跳过「让它自己看」（不然它会自己发一条私信，等于绕开这个开关）')
           else if (typeof tgtAgent.followup !== 'function') log('自动刷：这个对话没有 followup，跳过「让它自己看」')
           else if (!sessionRoute(tgtAgent)) log('自动刷：解析不到模型路由，跳过「让它自己看」')
           else if (!one) log('自动刷：这一轮没有可讲的条目，跳过「让它自己看」')
           else {
             // 台词在上面的「先转写」那一步就备好了（say），这里只管叫醒它写那一句。
-            const prompt = '我刚从推荐流刷到这条，已经分享给主人了：\n'
+            // 2026-11-18（MOSS 指出的口子）：交付没成功时别再写「已经分享给主人了」——
+            //   主人根本没收到，那句话会让它照着「已经发出去了」去说。改成如实交代，它自己再补一次 douyin_send。
+            const head = deliver === 'failed'
+              ? '我刚从推荐流刷到这条，但卡片和文字都没发出去（主人那边没收到）。我还是想跟你讲一句：\n'
+              : '我刚从推荐流刷到这条，已经分享给主人了：\n'
+            const prompt = head
               + '标题：' + one.desc + '\n链接：' + one.url + '\n'
               + (say
                 ? ('\n它的原话（本地转写，可能有错字）：\n' + say + '\n')

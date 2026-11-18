@@ -452,6 +452,8 @@ notice_list_v2[].comment.comment = {
 | 抖音登录态 | ✅ | 在 9334 里登一次，`douyin_save_login` 存 cookie，之后 `douyin_relogin` 恢复 |
 | **Python + curl_cffi** | ⚠️ **仅「签名直连」需要（可选）** | 取候选 / 读通知仍是页面内同源请求（`feed-pick.mjs` / `notice-read.mjs`），不依赖 Python。**但读楼中楼（`/comment/list/reply/`）不签名就不返回**，所以 2026-10-28 起加了一条可选快路：`_deps\scripts\douyin-signer\signed_get.py`（vendored `cv-cat/DouYin_Spider` 的 a_bogus）自己算签名直连，需要 `curl_cffi` + `cryptography`。不装也能用：`tools/comment-thread.mjs` 会自动退回「打开页面点开回复」的老路，只是慢十几秒。 |
 
+**平台**（2026-11-18 写实，别当成承诺）：**Windows 优先验证过**。macOS / Linux 没做实机验证 —— 代码里找浏览器、列进程、收紧 cookie 权限都按平台分了支（非 Windows 走 `chmod 600`），主链路（读私信、发私信、评论、刷候选）不依赖 Windows 专有调用；但可选的那两条路（签名直连、本地视频分析）在别的系统上要自己备好 Python 与 ffmpeg，出问题只能按源码排查，不保证开箱可用。
+
 ## 已知限制 / 风控
 
 - **私信 / 分享卡片会被风控静默丢**：发出方看着成功、接收方收不到（8101 / IM 静默丢弃）。无绕过手段，只能低频 + 短文本（实测 ≤10 字通过率高）。

@@ -230,12 +230,24 @@ def _find_interpreter(tag: Optional[str]) -> Optional[str]:
         candidates.append(os.environ['DOUYIN_PYTHON'])
     patterns = [
         str(_DEPS_ROOT / f'python{want[0]}{want[1]}' / f'cpython-{want_str}*' / 'python.exe'),
-        str(Path(os.environ.get('APPDATA', '')) / 'uv' / 'python' / f'cpython-{want_str}*' / 'python.exe'),
-        str(Path(os.environ.get('LOCALAPPDATA', '')) / 'uv' / 'python' / f'cpython-{want_str}*' / 'python.exe'),
-        f'C:/Program Files/Python{want[0]}{want[1]}/python.exe',
-        f'C:/Python{want[0]}{want[1]}/python.exe',
-        str(Path.home() / f'AppData/Local/Programs/Python/Python{want[0]}{want[1]}/python.exe'),
     ]
+    # 2026-11-18：这几条是 Windows 专有的安装位置（C:/Program Files…），
+    #   放到非 Windows 上只会白 glob 一圈。按平台分开写，别让别的系统跟着猜。
+    if sys.platform == 'win32':
+        patterns += [
+            str(Path(os.environ.get('APPDATA', '')) / 'uv' / 'python' / f'cpython-{want_str}*' / 'python.exe'),
+            str(Path(os.environ.get('LOCALAPPDATA', '')) / 'uv' / 'python' / f'cpython-{want_str}*' / 'python.exe'),
+            f'C:/Program Files/Python{want[0]}{want[1]}/python.exe',
+            f'C:/Python{want[0]}{want[1]}/python.exe',
+            str(Path.home() / f'AppData/Local/Programs/Python/Python{want[0]}{want[1]}/python.exe'),
+        ]
+    else:
+        patterns += [
+            f'/usr/bin/python{want_str}', f'/usr/local/bin/python{want_str}',
+            f'/opt/homebrew/bin/python{want_str}',
+            str(Path.home() / '.local' / 'bin' / f'python{want_str}'),
+            str(Path(os.environ.get('XDG_DATA_HOME', str(Path.home() / '.local' / 'share'))) / 'uv' / 'python' / f'cpython-{want_str}*' / 'bin' / 'python3'),
+        ]
     for p in patterns:
         candidates.extend(glob.glob(p))
     for exe in (f'python{want_str}', f'python{want[0]}{want[1]}'):
