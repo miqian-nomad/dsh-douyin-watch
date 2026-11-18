@@ -1532,7 +1532,11 @@ window.__ModuleLoader__.load({
           h(Row, {
             label: '每天最多刷几条',
             hint: '所有时间段加起来的上限；填 0 = 不自动刷'
-              + (Number(cfg.autoScrollTodayCount) > 0 ? '。今天已经刷了 ' + cfg.autoScrollTodayCount + ' 条，刷到上限今天就不再刷' : ''),
+              // 2026-11-18：无论刷没刷都要显示，不然改了上限也不知道今天还剩多少
+              + (Number(cfg.autoScrollPerDay) > 0
+                ? '。今天已经刷了 ' + (Number(cfg.autoScrollTodayCount) || 0) + ' 条，今天还剩 '
+                  + Math.max(0, Number(cfg.autoScrollPerDay) - (Number(cfg.autoScrollTodayCount) || 0)) + ' 条'
+                : ''),
           },
             h('input', {
               type: 'number', min: 0, max: 50, value: cfg.autoScrollPerDay,
