@@ -515,10 +515,22 @@ window.__ModuleLoader__.load({
         }).then((d) => {
           if (d && d.config) setCfg(d.config)
           return fetch('/api/douyin-watch/doctor', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }).then((r) => r.json())
-        }).then((d) => { setBusy(''); setChecks((d && d.checks) || []); setStep(7) })
+        // 2026-11-18（陌生人视角复查抓到的）：这里原来写死 setStep(7)。7 步时代它等于"去体检"，
+        //   引导长到 9 步之后 7 变成了「刷视频」—— 点「完成，体检」会往回跳一步，永远到不了体检页。
+        //   改成 STEP_MAX（=9，体检页），以后再加步骤也不用跟着改这个数字。
+        }).then((d) => { setBusy(''); setChecks((d && d.checks) || []); setStep(STEP_MAX) })
           .catch(() => { setBusy(''); setWarn('保存失败：接口没回应') })
       }
 
+      // 2026-11-18（陌生人视角复查）：体检页原来只能看到「完成，体检」那一次的结果；
+      //   一项都没拿到时页面会空着（而且还谎报全绿）。给一个能重跑的按钮。
+      const recheck = () => {
+        setBusy('recheck'); setWarn('')
+        fetch('/api/douyin-watch/doctor', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+          .then((r) => r.json())
+          .then((d) => { setBusy(''); setChecks((d && d.checks) || []); if (!(d && d.checks)) setWarn('体检接口没返回结果，稍后再试') })
+          .catch(() => { setBusy(''); setWarn('体检失败：接口没回应') })
+      }
       // 2026-11-17 重排（主人定的顺序，一步一件事）：
       //   ①「谁能命令它」并进第 4 步（认人 + 别人怎么办本来就是一件事）；
       //   ②第 5 步空出来给「它的性格」——它一开口就用这套口气，得在谈"怎么回"之前定；
@@ -819,8 +831,16 @@ window.__ModuleLoader__.load({
       if (step === STEP_MAX) {
         const list = Array.isArray(checks) ? checks : []
         const bad = list.filter((c) => !c.ok)
-        body.push(h('div', { style: { fontSize: 13, fontWeight: 600, color: bad.length ? T.danger : T.ok } },
-          bad.length ? ('还有 ' + bad.length + ' 项没过') : '体检全绿，可以开始用了'))
+        // 2026-11-18（陌生人视角复查）：checks 还没回来（空数组）时，原来 bad.length===0 会显示
+        //   「体检全绿，可以开始用了」—— 一项都没查也叫全绿，是假话。
+        body.push(h('div', { style: { fontSize: 13, fontWeight: 600, color: list.length ? (bad.length ? T.danger : T.ok) : C.text2 } },
+          list.length
+            ? (bad.length ? ('还有 ' + bad.length + ' 项没过') : '体检全绿，可以开始用了')
+            : '还没拿到体检结果（点下面的「重新体检」跑一次）'))
+        if (!list.length) {
+          body.push(h('div', { style: { padding: '10px 0' } },
+            btn('重新体检', recheck, { primary: true })))
+        }
         list.forEach((c) => body.push(h('div', { key: c.key, style: { display: 'flex', justifyContent: 'space-between', gap: 10, padding: '6px 0', borderTop: '1px solid ' + C.line } },
           h('div', null,
             h('div', { style: { fontSize: 12.5, color: c.ok ? C.text : T.danger } }, (c.ok ? '✓ ' : '✕ ') + c.name),
@@ -1589,7 +1609,10 @@ window.__ModuleLoader__.load({
                 '「按时间段」但还没有一段填完整 = 今天不刷。想全天刷，把上面的「什么时候刷」改成「开机就刷」。')
               : null),
             h('div', { style: { marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 } },
-              ...rows.map((r, i) => h('div', { key: 'w' + i, style: { display: 'flex', alignItems: 'center', gap: 8 } },
+              // 2026-11-18（主人批准的唯一改法）：这一行在 400px/320px 下放不下，原来是 nowrap 被裁、
+              //   右边「−」和「+ 添加时间段」被挡。这里只允许「放不下就换行」（flexWrap），
+              //   顺序不变、字号/控件尺寸/按钮一个都不缩不藏；rowGap 让换行后两行之间有 8px，跟横向间距一致。
+              ...rows.map((r, i) => h('div', { key: 'w' + i, style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, rowGap: 8 } },
                 timeSel(i, 'start'),
                 h('span', { style: { fontSize: 12, color: C.text3 } }, '到'),
                 timeSel(i, 'end'),

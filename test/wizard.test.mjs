@@ -166,3 +166,25 @@ test('体检页末尾告诉主人以后去哪改，并挡住误点「清除本�
   assert.match(block, /以后要改，去哪找/, '走完要给一句"以后去哪改"')
   assert.match(block, /别点「清除本机记录」/, '主人上次就是找不到入口、误清了自己的记录')
 })
+
+// 2026-11-18（陌生人视角复查）：引导从 7 步长到 9 步后，「完成，体检」还写死 setStep(7)，
+//   而 7 现在是「刷视频」—— 点完成会往回跳，永远看不到体检页。这条断言盯的是意图：
+//   完成之后要落在体检页（STEP_MAX），不是任何一个写死的数字。
+test('「完成，体检」跳的是体检页（STEP_MAX），不许写死步骤号', () => {
+  const i = CLIENT.indexOf('const finish = () => {')
+  assert.ok(i > 0, '找不到 finish')
+  const block = CLIENT.slice(i, CLIENT.indexOf('const recheck = () =>', i))
+  assert.match(block, /setStep\(STEP_MAX\)/, '完成之后要跳到体检页')
+  // 只看代码行：注释里那句「原来写死 setStep(7)」是历史说明，不该被这条断言抓到
+  const code = block.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n')
+  assert.equal(/setStep\(\d+\)/.test(code), false, '不许再用写死的步骤号（步骤一变就错位）')
+})
+
+// 2026-11-18：一项体检都没拿到时，原来会显示「体检全绿，可以开始用了」—— 0 项 ≠ 全过。
+test('体检结果为空时不许谎报「全绿」', () => {
+  const i = CLIENT.indexOf('if (step === STEP_MAX) {')
+  const block = CLIENT.slice(i, CLIENT.indexOf('const pct =', i))
+  assert.match(block, /list\.length \? \(bad\.length/, '「全绿」必须挂在 list.length 上')
+  assert.match(block, /还没拿到体检结果/, '没结果要说没结果')
+  assert.match(block, /btn\('重新体检'/, '没结果要给一个能重跑的口子')
+})

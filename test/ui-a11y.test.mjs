@@ -87,3 +87,17 @@ test('这批只动可用性：没碰配色/字号/圆角这些外观值', () => 
   // 字号只有在新增的几处（撤销条/标签）用到，行高 20px 那套不许变
   assert.match(U, /fontSize: 13, color: C\.text, lineHeight: '20px'/, 'Row 标签的字体行高被改了')
 })
+
+// 2026-11-18（主人批准的唯一改法）：窄屏 400/320 下时段那一行放不下会被裁、右边按钮被挡。
+//   只许「放不下就换行」，不许缩字号/缩控件/藏按钮 —— 这条盯的就是这两点。
+test('⑨ 时间段行：窄屏靠换行，不靠缩控件', () => {
+  const i = U.indexOf("key: 'w' + i, style: { display: 'flex'")
+  assert.ok(i > 0, '找不到时间段那一行的样式')
+  const row = U.slice(i, i + 220)
+  assert.match(row, /flexWrap: 'wrap'/, '要允许换行')
+  assert.match(row, /rowGap: 8/, '换行后两行之间的间距要和横向一致')
+  // 不许用「取消固定宽度由着它缩」的方式解决（那等于缩控件）
+  assert.equal(/minWidth: 0[^,]*, *width: 'auto'/.test(row), false, '别用缩控件的方式硬塞')
+  // 时间下拉的宽度必须还是 64（缩了就是另一个外观）
+  assert.match(U, /style: Object\.assign\(\{\}, ctlBase, \{ width: 64, paddingRight: 4 \}\)/, '时间下拉的宽度被改了')
+})

@@ -2276,6 +2276,11 @@ export function apply(ctx, config) {
         async execute(args, exec) {
           const text = String((args && args.text) || '').trim()
           if (!text) throw new Error('douyin_send 需要非空 text')
+          // 2026-11-18（陌生人视角复查）：没认领主人时 cfg.owner 是空的，以前会拿空昵称去开浏览器，
+          //   最后报一句「在会话列表里没找到「」」—— 对方看不懂。这里先说清缺什么，也不白开浏览器。
+          if (!String(cfg.owner || '').trim()) {
+            return { ok: false, delivered: false, read: false, detail: '还没认领主人 —— 先走首次引导第 4 步（点开你和它的那条私信会话再点认领），否则不知道该发给谁' }
+          }
           {
             const hits = guardOutbound(text)
             if (hits.length) return { ok: false, delivered: false, read: false, detail: '内容命中敏感规则，已拒绝发送：' + hits.join('、') }
@@ -3345,6 +3350,11 @@ export function apply(ctx, config) {
           } catch (e) { log('自动刷：转写出错 ' + ((e && e.message) || e)) }
         }
         if (cfg.autoScrollDeliverDm) {
+          // 2026-11-18（陌生人视角复查）：没认领主人时 cfg.owner 是空串，往下走只会拿空昵称去分享/发私信，
+          //   必然失败、还白启动一次浏览器。这里直接跳过并如实记日志 —— 不发任何东西（红线：没认领不对外动作）。
+          if (!String(cfg.owner || '').trim()) {
+            log('自动刷：还没认领主人，这次挑到的 ' + picked.length + ' 条不发私信（去首次引导第 4 步认领，或在设置里填「发给谁」）')
+          } else {
           // 2026-11-18（主人拍板）：结果默认发**视频分享卡片**（有封面、点开就能看），
           //   卡片发失败或回读不到，才退回「文字 + 长链接」兜底。
           const asCard = String(cfg.autoScrollDeliverAs || 'card') === 'card'
@@ -3370,6 +3380,7 @@ export function apply(ctx, config) {
               : ('今天给你挑了 ' + failed.length + ' 条：\n\n' + fbody)
             const sr = await sendChatText(target, head)
             log('自动刷：文字私信 ' + (!sr.ok ? '发送失败（' + (sr.error || 'im-send 报错') + '）' : (sr.readback ? '已回读确认发出' : '已执行但回读没找到（可能被风控吞）')))
+          }
           }
         }
         // 2026-11-18（主人要「AI 自己看」）：卡片发完，把它叫醒，让它自己去读一遍再讲给主人。

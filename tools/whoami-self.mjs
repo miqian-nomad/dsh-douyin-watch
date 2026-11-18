@@ -21,7 +21,9 @@ const JS = `(async function(){
   try {
     var r = await fetch('/aweme/v1/web/aweme/post/?' + qs, { credentials: 'include', headers: { referer: 'https://www.douyin.com/' } });
     var t = await r.text();
-    if (r.status !== 200) return JSON.stringify({ ok: false, http: r.status, why: '接口返回 ' + r.status });
+    // 2026-11-18（陌生人视角）：403 原来只吐「接口返回 403」，向导第 3 步照抄给用户看，
+    //   但没登录时看到这行完全不知道该干什么。如实报状态码，并把最常见的原因说人话。
+    if (r.status !== 200) return JSON.stringify({ ok: false, http: r.status, why: '接口返回 ' + r.status + '（最常见的原因：这个浏览器还没登录抖音号；先在第 2 步登录，再回来点这一下）' });
     if (!t) return JSON.stringify({ ok: false, http: r.status, why: '接口返回空 body（没登录或被风控）' });
     var j;
     try { j = JSON.parse(t) } catch (e) { return JSON.stringify({ ok: false, http: r.status, why: '返回不是 JSON：' + String(t).slice(0, 100) }) }
