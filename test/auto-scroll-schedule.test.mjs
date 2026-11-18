@@ -98,7 +98,26 @@ test('档位都在设置页改：什么时候刷、怎么摊开、每天几条',
 test('引导页不再自己编时间段（跟设置页只留一套）', () => {
   assert.equal(/中午晚上/.test(UI), false, '引导页不许再出现「中午晚上」这种自编预设')
   assert.equal(/全天都行/.test(UI), false, '引导页不许再出现「全天都行」这种自编预设')
-  assert.match(SRC, /if \(!wins\.length\) return true/, '没配时段不该永远不跑')
+})
+
+test('按时间段却一段没填 = 今天不刷（2026-11-18 主人拍板，以前是「空 = 全天不限」）', () => {
+  // 他在设置页选了「按时间段」、列表空着，结果全天都在刷，当天刷到 10 条才发现
+  const i = SRC.indexOf('function inAutoWindow()')
+  assert.ok(i > 0, '找不到 inAutoWindow')
+  const fn = SRC.slice(i, SRC.indexOf('// ── 2026-11-17：刷视频的"时刻表"', i))
+  assert.match(fn, /if \(!wins\.length\) return false/, '空列表必须当成「不刷」，不许回退成全天不限')
+  assert.equal(/if \(!wins\.length\) return true/.test(fn), false, '「空 = 不限」的老写法又回来了')
+  // 排时刻表这一层也要挡住：不许再回落到开机那套 5~20 分钟
+  assert.match(SRC, /if \(byWindow && !segs\.length\) \{/, '按时段但排不出段时要单独拦一道')
+  assert.match(SRC, /一个时段都没填'\) \+ '，今天不刷'/, '要在日志里说清为什么没排')
+  // 设置页也要讲明白，不然页面上一片空、主人不知道今天为什么不刷
+  assert.match(UI, /「按时间段」但一段都没填 = 今天不刷/, '设置页要写明后果')
+})
+
+test('规则改版要顶掉今天已经排好的旧表', () => {
+  // 不改签名的话：今天 pick-sched.json 里那张表签名不变，会继续按老规则跑完
+  assert.match(SRC, /const SCHED_RULE_VERSION = \d+/, '缺规则版本号')
+  assert.match(SRC, /const schedSig = \(\) => \['v' \+ SCHED_RULE_VERSION/, '版本号要进签名')
 })
 
 test('间隔 5~20 分钟随机；条数多就自然摊更久（不压成 2 分钟一条）', () => {

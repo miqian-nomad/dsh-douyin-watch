@@ -1906,7 +1906,11 @@ export function apply(ctx, config) {
     const cur = now.getHours() * 60 + now.getMinutes()
     const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : NaN }
     const wins = Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []
-    if (!wins.length) return true     // 选了按时段、却一个时段都没填 = 不限
+    // 2026-11-18 主人拍板改的：选了「按时间段」却一个时段都没填 = **今天不刷**。
+    //   以前这里是 return true（空 = 不限），结果他以为自己限了时段、其实全天都在刷，
+    //   当天已刷 10 条才发现（原话「我没有设时间段，为什么他还是能够分享视频给我」）。
+    //   想全天刷就切回「开机就刷」，别靠清空列表来表达。
+    if (!wins.length) return false
     for (const w of wins) {
       const parts = String(w).split('-')
       if (parts.length !== 2) continue
@@ -1966,7 +1970,12 @@ export function apply(ctx, config) {
     const wins = byWindow ? (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).filter(Boolean) : []
     const pers = Array.isArray(cfg.autoScrollWindowPer) ? cfg.autoScrollWindowPer : []
     const segs = wins.length ? expandWindows(wins, pers) : []
-    if (byWindow && wins.length && !segs.length) log('自动刷：时间段都解析不出来（' + wins.join(',') + '），先按开机就刷走')
+    // 2026-11-18 主人拍板：选了「按时间段」却没填（或填的解析不出来）= 今天一条都不排。
+    //   以前这里回退到 ①「开机就刷」那套算法，等于把「我限了时段」悄悄变成「全天随便刷」。
+    if (byWindow && !segs.length) {
+      log('自动刷：按时间段但' + (wins.length ? '时段都解析不出来（' + wins.join(',') + '）' : '一个时段都没填') + '，今天不刷')
+      return []
+    }
 
     if (!segs.length) {
       // ── ① 开机自动刷：没有上下界，自己起头再按 5~20 分钟隔开 ──
@@ -2020,8 +2029,11 @@ export function apply(ctx, config) {
     }
     return out
   }
-  /** 配置签名：改完时段/每段条数/总上限/方式，今天的表要跟着重排 */
-  const schedSig = () => [String(cfg.autoScrollWhen || 'uptime'),
+  // 配置签名：改完时段/每段条数/总上限/方式，今天的表要跟着重排
+  // 2026-11-18：规则本身改了（空时段 = 不刷）→ 版本号进签名。
+  //   不加这个的话，今天已经写进 pick-sched.json 的旧表签名一模一样，会继续按老规则跑完。
+  const SCHED_RULE_VERSION = 2
+  const schedSig = () => ['v' + SCHED_RULE_VERSION, String(cfg.autoScrollWhen || 'uptime'),
     (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).join(','),
     (Array.isArray(cfg.autoScrollWindowPer) ? cfg.autoScrollWindowPer : []).join(','),
     String(cfg.autoScrollPerDay || 0),

@@ -729,7 +729,7 @@ window.__ModuleLoader__.load({
             onChange: (v) => setScrollWhen(v === 'window' ? 'window' : 'uptime'),
             options: [{ v: 'uptime', t: '开机就刷' }, { v: 'window', t: '按时间段' }],
             hint: scrollWhen === 'window'
-              ? (winCount ? ('只在设置页定的 ' + winCount + ' 个时段里刷') : '还没定时段 —— 去设置页「自动刷视频」里填')
+              ? (winCount ? ('只在设置页定的 ' + winCount + ' 个时段里刷') : '还没定时段 —— 去设置页「自动刷视频」里填，不填就不刷')
               : '开机后随机等 10～30 分钟开始，之后每条随机隔 5～20 分钟',
           }),
           h(Seg, {
@@ -1579,6 +1579,9 @@ window.__ModuleLoader__.load({
             h('div', { style: { fontSize: 12, color: C.text3, marginTop: 2 } }, '每段后面填「这段看几条」：不填就用「每天最多」剩下的额度按段长分。'),
             (cfg.autoScrollWhen === 'window' ? null : h('div', { style: { fontSize: 12, color: '#b26a00', marginTop: 4 } },
               '现在是「开机就刷」，下面这几段不起作用。要按它来，把上面的「什么时候刷」改成「按设定时间段」。')),
+            // 2026-11-18 主人拍板：按时间段却一段没填 = 今天不刷（以前是「空 = 全天不限」，他没留意到）
+            (cfg.autoScrollWhen === 'window' && !rows.length ? h('div', { style: { fontSize: 12, color: '#b26a00', marginTop: 4 } },
+              '「按时间段」但一段都没填 = 今天不刷。想全天刷，把上面的「什么时候刷」改成「开机就刷」。') : null),
             h('div', { style: { marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 } },
               ...rows.map((r, i) => h('div', { key: 'w' + i, style: { display: 'flex', alignItems: 'center', gap: 8 } },
                 timeSel(i, 'start'),
