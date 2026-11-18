@@ -131,6 +131,44 @@ window.__ModuleLoader__.load({
     }
     ensureSelectTheme()
 
+    // ── 可用性样式（2026-11-18，MOSS 按 Web Interface Guidelines 审出来的）──────
+    //   为什么单独一张样式表：这些规则要么是 :focus-visible、要么是媒体查询，
+    //   内联样式表达不了；又不想把它们塞进 select 那张表里搅在一起。
+    //   改动都限定在 [data-dy-panel] 里面，不碰 DSH 其它页面。
+    const A11Y_CSS = [
+      // ① 键盘焦点：鼠标点不出现，Tab 走才出现
+      //   颜色用页面里本来就在用的那个固定品牌蓝（和「分段条」选中色 SEG_ACCENT 同值 #4d6bfe）：
+      //   --dsw-alias-brand-primary 在浅色下是近黑的墨色，拿它画焦点环会变成一圈黑框。
+      '[data-dy-panel] :is(input, select, textarea, button, a[href], [tabindex]):focus { outline: none; }',
+      '[data-dy-panel] :is(input, select, textarea, button, a[href], [tabindex]):focus-visible {',
+      '  outline: 2px solid #4d6bfe;',
+      '  outline-offset: 2px;',
+      '}',
+      // ② 数字列对齐（时间、条数这类）
+      '[data-dy-panel] input[type="number"] { font-variant-numeric: tabular-nums; }',
+      // ③ 按钮 hover 反馈：用内阴影叠一层灰，透明底和品牌色底都不跑色
+      '[data-dy-panel] button:not(:disabled):hover { box-shadow: inset 0 0 0 999px rgba(127,127,135,0.08); }',
+      '[data-dy-panel] button:not(:disabled):active { box-shadow: inset 0 0 0 999px rgba(127,127,135,0.14); }',
+      // ④ 系统设了「减少动态效果」就别动
+      '@media (prefers-reduced-motion: reduce) {',
+      '  [data-dy-panel] *, [data-dy-panel] *::before, [data-dy-panel] *::after {',
+      '    transition-duration: 0.001ms !important; animation-duration: 0.001ms !important;',
+      '  }',
+      '}',
+    ].join('\n')
+
+    const ensureA11yTheme = () => {
+      try {
+        if (typeof document === 'undefined' || !document.head) return
+        if (document.getElementById('dy-a11y-theme')) return
+        const st = document.createElement('style')
+        st.id = 'dy-a11y-theme'
+        st.textContent = A11Y_CSS
+        document.head.appendChild(st)
+      } catch { /* 注入失败不影响设置页 */ }
+    }
+    ensureA11yTheme()
+
     const parseWin = (s) => {      const m = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/.exec(String(s || '').trim());
       if (!m) return { start: '', end: '' };
       const pad = (t) => (t.length === 4 ? '0' + t : t);
@@ -157,10 +195,18 @@ window.__ModuleLoader__.load({
       }));
     }
 
+    // 2026-11-18：这里原来有一句关掉轮廓（outline none）的内联样式，而全文件没有任何替代焦点样式 →
+    //   键盘 Tab 走一圈完全看不出焦点在哪。现在把它去掉，焦点环交给 A11Y_CSS 统一管
+    //   （只在 :focus-visible 出现，鼠标点击不出现）。
+    //   ⚠️ 别再把关掉轮廓的写法加回来：内联样式会盖掉那条 CSS，键盘焦点就又没了。
     const ctlBase = {
       height: 32, borderRadius: 8, border: '1px solid ' + C.line,
+      // 2026-11-18：select 显式给 backgroundColor + color（规范要求，也让 Windows 深色下
+      //   弹层不至于白底白字）。背景仍旧是透明的 —— 外观和以前一模一样；
+      //   真正管弹层底色的是面板根节点上的 colorScheme（见 Panel / Wizard 的根 div）。
+      backgroundColor: 'transparent',
       background: 'transparent', color: C.text, padding: '0 8px',
-      fontSize: 13, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box',
+      fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box',
     };
 
     // 人设列表里那种小按钮（比输入框矮一档，跟行高对齐）
@@ -228,7 +274,22 @@ window.__ModuleLoader__.load({
       });
     }
 
+    // 2026-11-18：Row 的标签原来是普通 div —— 标签和右边控件没有任何关联，
+    //   读屏软件念到控件时不知道它是什么，鼠标点标签也不会聚焦到控件。
+    //   现在：标签是 <label>（样式同原来那个 div，排版不变），点它就聚焦到这一行的第一个控件；
+    //   右侧容器带 role=group + aria-labelledby，读屏念控件时会先念这一行的名字。
+    //   37 处 Row 都会自动受益，不用改调用方。
+    let dyRowSeq = 0
     function Row({ label, hint, children }) {
+      const labelId = React.useMemo(() => 'dy-row-' + (++dyRowSeq), [])
+      const boxRef = React.useRef(null)
+      const focusFirst = (e) => {
+        if (e) e.preventDefault()
+        const box = boxRef.current
+        if (!box || typeof box.querySelector !== 'function') return
+        const el = box.querySelector('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')
+        if (el && typeof el.focus === 'function') el.focus()
+      }
       return h('div', {
         style: {
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -236,10 +297,16 @@ window.__ModuleLoader__.load({
         },
       },
         h('div', { style: { minWidth: 0 } },
-          h('div', { style: { fontSize: 13, color: C.text, lineHeight: '20px' } }, label),
+          h('label', {
+            id: labelId, htmlFor: labelId, onClick: focusFirst,
+            style: { display: 'block', fontSize: 13, color: C.text, lineHeight: '20px', cursor: 'pointer' },
+          }, label),
           hint ? h('div', { style: { fontSize: 12, color: C.text3, lineHeight: '18px' } }, hint) : null,
         ),
-        h('div', { style: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8 } }, children),
+        h('div', {
+          ref: boxRef, role: 'group', 'aria-labelledby': labelId,
+          style: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8 },
+        }, children),
       );
     }
 
@@ -273,7 +340,8 @@ window.__ModuleLoader__.load({
       const T = TONE(dark)
       const color = state === 'ok' ? T.ok : state === 'fail' ? T.danger : C.text3
       return h('div', { style: { display: 'flex', gap: 6, alignItems: 'flex-start', fontSize: 12, color, lineHeight: '19px', marginTop: 8 } },
-        h('span', { style: { flex: '0 0 auto', fontWeight: 700 } }, state === 'ok' ? '✓' : state === 'fail' ? '✕' : '○'),
+        // 2026-11-18：✓/✕/○ 只是装饰，状态本身已经写在后面的文字里 → 别让读屏念出来
+        h('span', { 'aria-hidden': 'true', style: { flex: '0 0 auto', fontWeight: 700 } }, state === 'ok' ? '✓' : state === 'fail' ? '✕' : '○'),
         h('span', null, text || (state === 'ok' ? '已通过' : state === 'fail' ? '还没通过' : '还没检测')),
       )
     }
@@ -772,7 +840,7 @@ window.__ModuleLoader__.load({
 
       const pct = Math.round((Math.min(step, STEP_MAX) / STEP_MAX) * 100)
       const hint = step === STEP_MAX ? '' : (mustDo[step] ? '这一步不能跳过' : '可以稍后设置')
-      return h('div', { 'data-dy-panel': '1', 'data-dy-wizard': '1', style: { padding: '6px 0 16px' } },
+      return h('div', { 'data-dy-panel': '1', 'data-dy-wizard': '1', style: { padding: '6px 0 16px', colorScheme: dark ? 'dark' : 'light' } },
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
           h('div', { style: { fontSize: 13.5, fontWeight: 600, color: C.text } },
             '第 ' + step + ' / ' + STEP_MAX + ' 步 · ' + steps[step - 1]),
@@ -933,6 +1001,14 @@ window.__ModuleLoader__.load({
       const [checkBusy, setCheckBusy] = useState(false);
       const [checks, setChecks] = useState(null);
       const [advOpen, setAdvOpen] = useState(false);
+      // 2026-11-18：删时间段要留退路（主人以前就因为没退路误删过 self.json）。
+      //   删了不弹窗确认，改成「先删掉 + 10 秒内可撤销」，撤销把原位置那一行放回去。
+      const [undoWin, setUndoWin] = useState(null);   // { row, index }
+      useEffect(() => {
+        if (!undoWin) return undefined;
+        const t = setTimeout(() => setUndoWin(null), 10000);
+        return () => clearTimeout(t);
+      }, [undoWin]);
 
       // 人设库（内置三套只读 + 导入的可编辑），列表只拿元数据，正文按需取
       const loadPersonas = () => fetch('/api/douyin-watch/personas')
@@ -1260,7 +1336,7 @@ window.__ModuleLoader__.load({
         )
       }
 
-      return h('div', { 'data-dy-panel': '1', style: { padding: '4px 0 16px' } },
+      return h('div', { 'data-dy-panel': '1', style: { padding: '4px 0 16px', colorScheme: dark ? 'dark' : 'light' } },
 
         wizardEntry(),
 
@@ -1518,7 +1594,10 @@ window.__ModuleLoader__.load({
                 h('span', { style: { fontSize: 12, color: C.text3 } }, '条'),
                 h('button', {
                   type: 'button',
-                  onClick: () => commit(rows.filter((_, j) => j !== i)),
+                  // 2026-11-18：纯图标按钮给了可访问名称；删掉改成「可撤销」而不是弹窗
+                  'aria-label': '删掉这一段（' + (r.start && r.end ? (r.start + ' 到 ' + r.end) : '还没填时间') + '，10 秒内可撤销）',
+                  title: '删掉这一段（10 秒内可撤销）',
+                  onClick: () => { commit(rows.filter((_, j) => j !== i)); setUndoWin({ row: r, index: i }); },
                   style: Object.assign({}, ctlBase, { width: 32, cursor: 'pointer', color: C.text2 }),
                 }, '−'),
               )),
@@ -1527,6 +1606,26 @@ window.__ModuleLoader__.load({
                 onClick: () => commit(rows.concat([{ start: '', end: '', per: 0 }])),
                 style: Object.assign({}, ctlBase, { marginTop: 2, width: 'auto', alignSelf: 'flex-start', padding: '0 12px', cursor: 'pointer', color: C.text2 }),
               }, '+ 添加时间段'),
+              // 删除后的撤销条：10 秒后自己消失（时间到由上面的 useEffect 清）
+              undoWin ? h('div', {
+                style: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: C.text3, marginTop: 2 },
+              },
+                h('span', null, '已删掉 '
+                  + (undoWin.row && undoWin.row.start && undoWin.row.end
+                    ? (undoWin.row.start + ' 到 ' + undoWin.row.end)
+                    : '那一段') + ' 这段'),
+                h('button', {
+                  type: 'button',
+                  onClick: () => {
+                    const next = rows.slice();
+                    const at = Math.max(0, Math.min(Number(undoWin.index) || 0, next.length));
+                    next.splice(at, 0, undoWin.row);
+                    commit(next);
+                    setUndoWin(null);
+                  },
+                  style: Object.assign({}, ctlBase, { width: 'auto', height: 26, padding: '0 10px', fontSize: 12, cursor: 'pointer', color: C.text2 }),
+                }, '撤销'),
+              ) : null,
             ),
           ),
           h(Row, {

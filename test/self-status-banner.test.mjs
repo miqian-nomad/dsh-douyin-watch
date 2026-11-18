@@ -96,7 +96,8 @@ test('界面：提示文案 + 「去重新引导」按钮，常驻入口「重�
   assert.match(CLIENT, /\}, '去重新引导'\)/, '提示里要带一个直达入口')
   assert.match(CLIENT, /\}, '重新引导'\)/, '状态正常时也要有常驻入口（不是藏角落）')
   // 入口在面板最顶部：wizardEntry() 是常规页容器的第一个子元素
-  assert.match(CLIENT, /return h\('div', \{ 'data-dy-panel': '1', style: \{ padding: '4px 0 16px' \} \},\s*\n\s*wizardEntry\(\)/, '入口/提示必须放在整页最前面')
+  // （2026-11-18：根节点 style 多了 colorScheme，断言放宽成「padding 在最前、后面还允许别的键」）
+  assert.match(CLIENT, /return h\('div', \{ 'data-dy-panel': '1', style: \{ padding: '4px 0 16px'[^}]*\} \},\s*\n\s*wizardEntry\(\)/, '入口/提示必须放在整页最前面')
 })
 
 test('界面：向导页里也有「重新引导」入口（重新开始，只清界面状态）', () => {
