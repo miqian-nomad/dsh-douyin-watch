@@ -3285,6 +3285,17 @@ export function apply(ctx, config) {
         if (!r.ok) { log('自动刷：取候选失败 n=' + (r.items ? r.items.length : 0) + ' err=' + (r.error || '-') + ' raw=' + (r.raw || '-')); return }
         log('自动刷：取到 ' + r.items.length + ' 条候选')
         const picked = r.items.slice(0, Math.max(1, Math.min(perDay - st.count, burstRun ? runLimit : 1)))
+        // 2026-11-18 主人定的顺序：**先转写给 AI 看 → 再发卡片 → 再叫醒它写文字**。
+        //   以前卡片先发、转写后跑，中间断 30~60 秒，卡片和文字隔得太开，看着割裂。
+        let say = ''
+        if (cfg.autoScrollAgentRead && picked[0]) {
+          try {
+            const ar = await runNode(cfg.analyzeScript, ['--aweme', awemeIdOf(picked[0].url)], 8 * 60 * 1000)
+            const ap = (ar && ar.parsed) || {}
+            if (ap.ok) say = String(ap.transcript || '').replace(/\s+/g, ' ').slice(0, 1500)
+            else log('自动刷：转写失败 ' + (ap.error || (ar.error && ar.error.message) || '-'))
+          } catch (e) { log('自动刷：转写出错 ' + ((e && e.message) || e)) }
+        }
         if (cfg.autoScrollDeliverDm) {
           // 2026-11-18（主人拍板）：结果默认发**视频分享卡片**（有封面、点开就能看），
           //   卡片发失败或回读不到，才退回「文字 + 长链接」兜底。
@@ -3323,16 +3334,7 @@ export function apply(ctx, config) {
           else if (!sessionRoute(tgtAgent)) log('自动刷：解析不到模型路由，跳过「让它自己看」')
           else if (!one) log('自动刷：这一轮没有可讲的条目，跳过「让它自己看」')
           else {
-            // 素材由插件搬：先在本地转写（纯 CPU，不花 token），再把台词交给它判断。
-            //   它手上只有 read/send/comment/… 那 8 个工具，**没有** douyin_analyze，
-            //   所以只丢个链接给它，它只能凭标题瞎猜。
-            let say = ''
-            try {
-              const ar = await runNode(cfg.analyzeScript, ['--aweme', awemeIdOf(one.url)], 8 * 60 * 1000)
-              const ap = (ar && ar.parsed) || {}
-              if (ap.ok) say = String(ap.transcript || '').replace(/\s+/g, ' ').slice(0, 1500)
-              else log('自动刷：转写失败 ' + (ap.error || (ar.error && ar.error.message) || '-'))
-            } catch (e) { log('自动刷：转写出错 ' + ((e && e.message) || e)) }
+            // 台词在上面的「先转写」那一步就备好了（say），这里只管叫醒它写那一句。
             const prompt = '我刚从推荐流刷到这条，已经分享给主人了：\n'
               + '标题：' + one.desc + '\n链接：' + one.url + '\n'
               + (say

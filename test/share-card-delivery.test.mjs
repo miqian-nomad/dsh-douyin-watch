@@ -59,6 +59,15 @@ test('刷完叫醒它自己看：走 followup，不碰自己发的卡片', () =>
   assert.match(block, /tgtAgent\.followup\(makeUserMessage\(prompt\)\)/, '要用 followup 主动投递')
   assert.match(block, /sessionRoute\(tgtAgent\)/, '投递前先确认能解析模型路由')
   assert.match(block, /const tgtAgent = target/, 'watched 的 key 才是 agent，value 是清理函数（取错就没 followup）')
-  assert.match(block, /cfg\.analyzeScript/, '插件自己先转写，不然它只能凭标题瞎猜')
   assert.match(block, /douyin_send/, '要让它自己讲给主人')
+})
+
+test('顺序：先转写 → 再发卡片 → 再叫醒它写文字', () => {
+  const a = SRC.indexOf("let say = ''")
+  const b = SRC.indexOf('await shareCardTo(aid, cfg.owner)', a)
+  const c = SRC.indexOf('tgtAgent.followup(makeUserMessage(prompt))', a)
+  assert.ok(a > 0, '找不到「先转写」这一步')
+  assert.ok(b > a, '卡片必须在转写之后发（否则卡片先到、文字隔半分钟才来，很割裂）')
+  assert.ok(c > b, '叫醒它写在卡片之后')
+  assert.match(SRC.slice(a, a + 800), /cfg\.analyzeScript/, '转写要用 analyze 脚本')
 })
