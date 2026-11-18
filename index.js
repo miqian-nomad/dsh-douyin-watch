@@ -2048,7 +2048,11 @@ export function apply(ctx, config) {
   function logIdleScheduleOnce() {
     if (String(cfg.autoScrollWhen || 'uptime') !== 'window') return
     const wins = (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).filter(Boolean)
-    if (expandWindows(wins, cfg.autoScrollWindowPer).length) return
+    // 2026-11-18：cfg 是 {...DEFAULTS, ...fileCfg, ...boot} —— 手改过的配置文件里
+    //   autoScrollWindowPer 写成 null/字符串时，expandWindows 里 pers[i] 会抛 TypeError，
+    //   抛在 setInterval 回调里就是每 60 秒一条报错。这里跟 buildSlotTimes 一样先兜住。
+    const pers = Array.isArray(cfg.autoScrollWindowPer) ? cfg.autoScrollWindowPer : []
+    if (expandWindows(wins, pers).length) return
     const sig = schedSig()
     if (idleLoggedSig === sig) return
     idleLoggedSig = sig
