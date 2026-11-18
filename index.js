@@ -1687,13 +1687,21 @@ export function apply(ctx, config) {
       const j = JSON.parse(readFileSync(purgeStateFile, 'utf8'))
       if (j && now - Number(j.at || 0) < 86400000) return // 24 小时内已经清过
     } catch { /* 没有记账文件就清一次 */ }
-    runNode(join(HERE, 'tools', 'clean-cache.mjs'), ['--skip-browser', '--skip-inbox', '--analyses-dir', analysesDir, '--analyses-days', '14'], 120000)
+    // 2026-11-18（主人同意）：浏览器缓存和 inbox 旧图也一起清。
+    //   清缓存要先把 9334 那个 Chrome 关掉（文件被占用删不干净），所以先暂停哨兵，
+    //   清完再放开；失败不影响主流程，下一次（明天）再试。
+    pauseWatcher()
+    runNode(join(HERE, 'tools', 'clean-cache.mjs'),
+      ['--inbox-days', '7', '--analyses-dir', analysesDir, '--analyses-days', '14'], 300000)
       .then((r) => {
         const p = r.parsed || {}
         try { writeFileSync(purgeStateFile, JSON.stringify({ at: now })) } catch { /* ignore */ }
-        if (p.ok && (p.removed || []).length) log('自动清理分析产物：' + (p.removed || []).join('; '))
+        if (p.ok && (p.removed || []).length) {
+          log('自动清理：' + (p.removed || []).join('; ') + (p.freedMB ? '，共释放 ' + p.freedMB + ' MB' : ''))
+        }
       })
       .catch(() => { /* 清不掉不影响主流程 */ })
+      .finally(() => { resumeWatcher() })
   }
   let lockHeld = false
   let lockNoteAt = 0

@@ -25,3 +25,12 @@ test('每天清一次，保留 14 天', () => {
   assert.match(SRC, /'--analyses-days', '14'/, '默认保留 14 天')
   assert.match(SRC, /now - Number\(j\.at \|\| 0\) < 86400000/, '24 小时内别重复清')
 })
+
+test('浏览器缓存和 inbox 图也一起清，清之前暂停哨兵', () => {
+  assert.equal(/--skip-browser'.*--skip-inbox/.test(SRC), false, '别再把浏览器缓存跳过')
+  assert.match(SRC, /'--inbox-days', '7'/, 'inbox 里 7 天前的图要清')
+  const i = SRC.indexOf('function maybePurgeAnalyses()')
+  const block = SRC.slice(i, i + 1400)
+  assert.match(block, /pauseWatcher\(\)/, '清缓存要关 Chrome，先暂停哨兵')
+  assert.match(block, /finally\(\(\) => \{ resumeWatcher\(\) \}\)/, '清完必须放开哨兵')
+})
