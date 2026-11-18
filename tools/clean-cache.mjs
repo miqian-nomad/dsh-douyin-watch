@@ -22,7 +22,7 @@ const argv = process.argv.slice(2)
 const argOf = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? (argv[i + 1] ?? d) : d }
 const DRY = argv.includes('--dry')
 const INBOX_DAYS = Math.max(0, Number(argOf('--inbox-days', '7')) || 0)
-// 视频分析产物（联系表 + 文案）：默认放在 $HOME/analyses/<视频id>/
+// 视频分析产物（联系图 + 文案）：实际落在 $HOME/douyin_out/<视频id>/（见 analyze-video.mjs）
 // --analyses-days 0 = 全清（按钮用）；不传 = 14 天（自动清理用）
 const ANALYSES_DIR = String(argOf('--analyses-dir', '')).trim()
 const ANALYSES_DAYS = Number(argOf('--analyses-days', '14'))

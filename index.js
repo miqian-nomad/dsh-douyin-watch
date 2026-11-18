@@ -1674,7 +1674,9 @@ export function apply(ctx, config) {
   //   重复唤醒、工具 already registered。谁先拿锁谁盯，另一个只保留设置接口。
   const lockFile = join(cfg.home || HOME, 'watcher.lock')
   // 视频分析产物（联系表/文案）的集中目录 + 每日清理的记账文件
-  const analysesDir = join(cfg.home || HOME, 'analyses')
+  // ⚠️ 2026-11-18 修：产物其实写在 <家目录>/douyin_out/<视频id>/（见 tools/analyze-video.mjs），
+  //    这里原来指向 analyses/，等于每天清一个空目录 —— 真正堆积的 193 个文件没人清。
+  const analysesDir = join(cfg.home || HOME, 'douyin_out')
   const purgeStateFile = join(cfg.home || HOME, 'analyses-purge.json')
   let purgeCheckedAt = 0
   function maybePurgeAnalyses() {
