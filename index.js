@@ -187,7 +187,7 @@ const DEFAULTS = {
   //   'uptime'（默认）= 跟着开机走 —— 开机后随机等 10~30 分钟开始，之后每条随机隔 5~20 分钟，不限钟点；
   //   'window'       = 只在下面 autoScrollWindows 圈定的时段里刷。
   autoScrollWhen: 'uptime',
-  autoScrollWindows: [], // 自动跑的时间段，可增删（只在 when='window' 时用；空 = 不限定）
+  autoScrollWindows: [], // 自动跑的时间段，可增删（只在 when='window' 时用；空 = 今天不刷，2026-11-18 改）
   // 2026-11-18（主人要的）：和上面**同下标** —— 每个时间段自己看几条。
   //   0 = 这段不单独限，用「每天最多」剩下的额度按段长比例分。
   autoScrollWindowPer: [],
@@ -2038,6 +2038,22 @@ export function apply(ctx, config) {
     (Array.isArray(cfg.autoScrollWindowPer) ? cfg.autoScrollWindowPer : []).join(','),
     String(cfg.autoScrollPerDay || 0),
     String(cfg.autoScrollSpread || 'spread')].join('|')
+  /**
+   * 「选了按时间段、却没有一段能用」时，每 60 秒都会在 inAutoWindow() 被挡回来 ——
+   * 挡回来是静默的，主人在日志里什么都看不到（2026-11-18 自审发现：
+   * buildSlotTimes 里那句「今天不刷」根本走不到，因为更前面的闸就先 return 了）。
+   * 这里同一个配置签名只打一次，既不刷屏又能解释「为什么今天一条都没刷」。
+   */
+  let idleLoggedSig = ''
+  function logIdleScheduleOnce() {
+    if (String(cfg.autoScrollWhen || 'uptime') !== 'window') return
+    const wins = (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).filter(Boolean)
+    if (expandWindows(wins, cfg.autoScrollWindowPer).length) return
+    const sig = schedSig()
+    if (idleLoggedSig === sig) return
+    idleLoggedSig = sig
+    log('自动刷：按时间段但' + (wins.length ? '时段都解析不出来（' + wins.join(',') + '）' : '一个时段都没填') + '，今天不刷')
+  }
   /** 到点该跑的那一条；没到点返回 null */
   function dueSlot(perDay) {
     let s = readSched()
@@ -3291,7 +3307,7 @@ export function apply(ctx, config) {
       if (busy) return
       if (!cfg.enabled) return
       if (!cfg.autoScrollEnabled) return
-      if (!inAutoWindow()) return
+      if (!inAutoWindow()) { logIdleScheduleOnce(); return }
       const st = readPickerState()
       const perDay = Number(cfg.autoScrollPerDay || 0)
       if (!perDay) return

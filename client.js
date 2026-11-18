@@ -1580,8 +1580,14 @@ window.__ModuleLoader__.load({
             (cfg.autoScrollWhen === 'window' ? null : h('div', { style: { fontSize: 12, color: '#b26a00', marginTop: 4 } },
               '现在是「开机就刷」，下面这几段不起作用。要按它来，把上面的「什么时候刷」改成「按设定时间段」。')),
             // 2026-11-18 主人拍板：按时间段却一段没填 = 今天不刷（以前是「空 = 全天不限」，他没留意到）
-            (cfg.autoScrollWhen === 'window' && !rows.length ? h('div', { style: { fontSize: 12, color: '#b26a00', marginTop: 4 } },
-              '「按时间段」但一段都没填 = 今天不刷。想全天刷，把上面的「什么时候刷」改成「开机就刷」。') : null),
+            // 2026-11-18 补：判据改成「有没有**填完的**段」，不是「列表里有没有行」——
+            //   点了「+ 添加时间段」但时、分没选完时 rows.length 已经是 1，而保存下来的
+            //   autoScrollWindows 还是空的（commit 只收 start&&end 都有的段）→ 那时候其实不刷，
+            //   原来按 rows.length 判会把这个警告憋掉，正好漏在最容易上当的情况。
+            (cfg.autoScrollWhen === 'window' && !rows.some((r) => r && r.start && r.end)
+              ? h('div', { style: { fontSize: 12, color: '#b26a00', marginTop: 4 } },
+                '「按时间段」但还没有一段填完整 = 今天不刷。想全天刷，把上面的「什么时候刷」改成「开机就刷」。')
+              : null),
             h('div', { style: { marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 } },
               ...rows.map((r, i) => h('div', { key: 'w' + i, style: { display: 'flex', alignItems: 'center', gap: 8 } },
                 timeSel(i, 'start'),
@@ -1591,7 +1597,10 @@ window.__ModuleLoader__.load({
                 h('span', { style: { fontSize: 12, color: C.text3, marginLeft: 4 } }, '这段看'),
                 h('input', {
                   type: 'number', min: 0, max: 30, value: r.per || '',
-                  placeholder: '不限',
+                  // 2026-11-18：原来写「不限」。这个词在这页有两种意思（时段不限 / 条数不限），
+                  //   而「时段空着 = 今天不刷」刚定下来，看见「不限」很容易以为"我这行没设限制也照刷"。
+                  //   改成和上面的说明同口径：不填就按额度分。
+                  placeholder: '按额度分',
                   onChange: (e) => {
                     const next = rows.slice();
                     next[i] = Object.assign({}, next[i], { per: Math.max(0, Number(e.target.value) || 0) });
