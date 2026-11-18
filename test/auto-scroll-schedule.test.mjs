@@ -49,7 +49,8 @@ test('每个时间段自己填几条，外面的「每天最多」管所有段',
   assert.match(SRC, /autoScrollWindowPer:/, '要有「每段几条」的配置')
   assert.match(SRC, /TOGGLE_KEYS\s*=\s*\[[^\]]*'autoScrollWindowPer'/, '漏了白名单，设置页存不进去')
   assert.match(LIB, /const spare = Math\.max\(0, n - asked\)/, '没填条数的段要用剩下的额度')
-  assert.match(LIB, /Math\.min\(s\.per, n - acc\)/, '各段加起来超了总上限就按时间先后截断')
+  // 2026-11-18：累加改成按「今晚优先、尾段最后」的顺序走，判据不变 —— 各段超了天花板就按剩余额度截断
+  assert.match(LIB, /Math\.min\(segs\[i\]\.per, n - acc\)/, '各段加起来超了总上限就截断（剩余额度不够就少给）')
   assert.match(UI, /这段看/, '设置页每段后面要有「这段看几条」')
   assert.match(UI, /autoScrollWindowPer:/, '保存时要把每段条数一起写进去')
 })

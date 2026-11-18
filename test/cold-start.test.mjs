@@ -81,3 +81,12 @@ test('cookie 文件权限：Windows icacls / 其它 chmod 600', () => {
   assert.match(SRC, /execFileSync\('icacls'/, 'Windows 要 icacls')
   assert.match(SRC, /process\.platform !== 'win32'/, '两条路必须按平台分（非 Windows 走 chmod）')
 })
+
+// 2026-11-18（MOSS 批的）：非 Windows 找解释器先 python3 再 python；Windows 行为一个字不改。
+test('depsPython：非 Windows 先 python3 再 python，Windows 照旧', () => {
+  const SRC = readFileSync(join(ROOT, 'lib', 'deps-root.mjs'), 'utf8')
+  assert.match(SRC, /if \(process\.platform === 'win32'\) return 'python'/, 'Windows 必须还是原来的 python')
+  assert.match(SRC, /for \(const nm of \['python3', 'python'\]\)/, '非 Windows 先 python3 再 python')
+  assert.match(SRC, /function roughWhich\(name\)/, '要有个按 PATH 粗查的实现')
+  assert.match(SRC, /if \(existsSync\(p\)\) return p/, '粗查用 existsSync，不改异步')
+})
