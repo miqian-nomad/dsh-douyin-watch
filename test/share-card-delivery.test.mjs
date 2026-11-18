@@ -18,8 +18,14 @@ test('默认发卡片，并且写进配置白名单', () => {
 })
 
 test('发卡片走 card-share，发文字才是 im-send', () => {
-  assert.match(SRC, /function shareCardTo\(/, '要有发卡片的封装')
-  assert.match(SRC, /cfg\.shareScript/, '卡片的脚本是 card-share.mjs')
+  // 2026-11-18：两个壳子搬进 lib/outbound.mjs（exec 可注入，好断言 --to 不为空）
+  const OUT = readFileSync(join(ROOT, 'lib', 'outbound.mjs'), 'utf8')
+  assert.match(SRC, /const shareCardTo = makeShareCardTo\(\{/, 'index.js 要用卡片壳子')
+  assert.match(SRC, /script: cfg\.shareScript/, '卡片的脚本是 card-share.mjs')
+  assert.match(SRC, /const sendChatText = makeSendChatText\(\{/, '文字那条要走 im-send 壳子')
+  assert.match(SRC, /script: cfg\.sendScript/, '文字的脚本是 im-send.mjs')
+  assert.match(OUT, /export function makeShareCardTo/, '缺发卡片的实现')
+  assert.match(OUT, /export function makeSendChatText/, '缺发私信的实现')
   assert.match(SRC, /function readbackCard\(/, '卡片要能回读')
 })
 

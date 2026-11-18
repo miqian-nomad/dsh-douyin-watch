@@ -71,6 +71,7 @@ import { resolveSelfIdentity, mergeLearned, normalizeStore, selfStatus } from '.
 import { classifyCommentProbe, probeText as probeTextOf, PROBE } from './lib/comment-probe.mjs'
 import { PERSONA_PRESETS, personaById } from './lib/personas.mjs'
 import { localDateKey, expandWindows, planWindowSlots } from './lib/sched.mjs'
+import { resolveOwnerName, makeSendChatText, makeShareCardTo, NO_OWNER_MSG } from './lib/outbound.mjs'
 import { listPersonas, resolvePersona, personaText, mutate as mutatePersonas, storePath } from './lib/persona-store.mjs'
 
 // 插件自身目录（用于定位 tools/ 里的脚本，让包自包含、不依赖外部路径）
@@ -430,6 +431,26 @@ export function apply(ctx, config) {
       }
     }
   } catch { /* 迁移失败不影响主流程 */ }
+
+  // ── 启动同步 owner（2026-11-18 修的 bug）────────────────────────────────
+  //   以前认领只写 owner.json，从不回写 cfg.owner；老用户升级后如果配置文件里 owner 是空的
+  //   （引导认领出来的那批人就是这样），发私信/发卡片全部拿空串当收件人。
+  //   这里只补「空值」：cfg.owner 有值就不动，绝不覆盖用户手填的名字。
+  try {
+    if (!String(cfg.owner || '').trim()) {
+      const rec = readOwnerClaim()
+      const nick = String((rec && rec.nick) || '').trim()
+      if (nick) {
+        cfg.owner = nick
+        fileCfg.owner = nick
+        let disk = {}
+        try { disk = JSON.parse(readFileSync(cfgPath, 'utf8')) || {} } catch { disk = {} }
+        disk.owner = nick
+        try { writeFileSync(cfgPath, JSON.stringify(disk, null, 2)) } catch { /* 写不了就只在内存里生效 */ }
+        log('启动同步：cfg.owner 是空的，用 owner.json 里的「' + nick + '」补上（不补就发不出去）')
+      }
+    }
+  } catch { /* 补不上不影响主流程 */ }
 
   // ── 统一跑一个 node 脚本（9334 Chrome 侧），返回 { ok, parsed, error, raw } ──
   const runNode = (script, args = [], timeoutMs = 120000) => new Promise((resolve) => {
@@ -810,6 +831,19 @@ export function apply(ctx, config) {
               writeFileSync(cfg.cfgFile, JSON.stringify(disk, null, 2))
             } catch { /* 写不了不影响认领 */ }
           }
+          // 2026-11-18：引导这条认领路也要同步 owner（和设置页那条一样）——
+          //   新用户基本都是走引导认领的，漏了这条等于没修。
+          if (rec && rec.nick && !String(cfg.owner || '').trim()) {
+            cfg.owner = rec.nick
+            fileCfg.owner = rec.nick
+            try {
+              let disk = {}
+              try { disk = JSON.parse(readFileSync(cfg.cfgFile, 'utf8')) || {} } catch { disk = {} }
+              disk.owner = rec.nick
+              writeFileSync(cfg.cfgFile, JSON.stringify(disk, null, 2))
+              log('引导认领：cfg.owner 是空的 → 已同步为「' + rec.nick + '」并写进配置')
+            } catch { /* 写不了不影响认领 */ }
+          }
           log('引导：已认领主人 ' + ((rec && rec.nick) || '(无昵称)'))
           return sendJson(200, {
             ok: true, claim: rec, config: await view(),
@@ -938,6 +972,21 @@ export function apply(ctx, config) {
               disk.peer = rec.nick
               writeFileSync(cfg.cfgFile, JSON.stringify(disk, null, 2))
             } catch { /* 写不了不影响认领 */ }
+          }
+          // 2026-11-18 修的 bug：认领**只写了 owner.json**，从来没回写 cfg.owner ——
+          //   sendChatText / shareCardTo / douyin_send 都读 cfg.owner，于是新用户认领成功后
+          //   所有发送路径拿到的是空串（主人这台机器看不出，是因为他 watch-config.json 里早填了）。
+          //   语义别合并：peer = 要盯的会话，owner = 能命令它的人，这里补的是 owner。
+          if (rec && rec.nick && !String(cfg.owner || '').trim()) {
+            cfg.owner = rec.nick
+            fileCfg.owner = rec.nick
+            try {
+              let disk = {}
+              try { disk = JSON.parse(readFileSync(cfg.cfgFile, 'utf8')) || {} } catch { disk = {} }
+              disk.owner = rec.nick
+              writeFileSync(cfg.cfgFile, JSON.stringify(disk, null, 2))
+              log('认领：cfg.owner 是空的 → 已同步为「' + rec.nick + '」并写进配置（不然发不出去）')
+            } catch { /* 写不了也不影响这一次认领 */ }
           }
           log('已认领主人：' + ((rec && rec.nick) || '(无昵称)') + ' —— 认领即生效（不用等他发消息）')
           return sendJson(200, {
@@ -1817,57 +1866,29 @@ export function apply(ctx, config) {
     })
   }
 
+  /**
+   * 现在的收件人：cfg.owner 优先，其次 owner.json 里的 nick（认领过就有）。
+   * 2026-11-18 修的 bug：认领只写 owner.json，从不回写 cfg.owner，于是新用户
+   *   认领成功、哨兵也能读私信，但发出去的三条路（文字/卡片/douyin_send）全是空昵称。
+   *   语义别合并：peer 是"要盯的会话"，owner 是"能命令它的人"，这里只补 owner 的取值。
+   */
+  const ownerName = () => resolveOwnerName(cfg.owner, (readOwnerClaim() || {}).nick)
+
   /** 往和主人的会话里发一条文字 —— 走 im-send.mjs（9334 Chrome），这是唯一实测能送达的路 */
-  async function sendChatText(agent, text) {
-    const node = cfg.nodeBin || process.execPath
-    const script = cfg.sendScript
-    const peer = cfg.owner
-    return new Promise((resolve) => {
-      execFile(node, [script, '--to', peer, '--text', text], {
-        env: { ...process.env, DOUYIN_HOME: (cfg.home || HOME) },
-        timeout: 120000,
-        maxBuffer: 2 * 1024 * 1024,
-      }, (error, stdout) => {
-        const out = String(stdout || '')
-        let parsed = null
-        // im-send.mjs 输出的是**多行** JSON，整段解析；最后一行只有一个 }
-        try { parsed = JSON.parse(out.trim()) } catch { try { parsed = JSON.parse(out.trim().split('\n').pop()) } catch { /* ignore */ } }
-        // im-send.mjs 已经做了真回读：readback =「我发的」消息里是否真的多出这条，
-        // 它自己的 ok = 输入框已清空 && readback。这里原样带出来 ——
-        // 只留一个布尔就等于把唯一的送达证据扔掉（以前的 bug）。
-        resolve({
-          ok: !!(parsed && parsed.ok && parsed.sent),
-          readback: !!(parsed && parsed.readback),
-          to: String((parsed && parsed.to) || peer || ''),
-          error: String((parsed && parsed.error) || (error && error.message) || ''),
-        })
-      })
-    })
-  }
+  const sendChatText = makeSendChatText({
+    node: cfg.nodeBin || process.execPath,
+    script: cfg.sendScript,
+    env: () => ({ ...process.env, DOUYIN_HOME: (cfg.home || HOME) }),
+    peerName: ownerName,
+  })
 
   /** 用抖音自己的「分享给朋友」把视频以**卡片**发给好友（card-share.mjs） */
-  function shareCardTo(awemeId, peer) {
-    const node = cfg.nodeBin || process.execPath
-    const script = cfg.shareScript
-    return new Promise((resolve) => {
-      execFile(node, [script, String(awemeId), String(peer || cfg.owner || '')], {
-        env: { ...process.env, DOUYIN_HOME: (cfg.home || HOME) },
-        timeout: 90000,
-        maxBuffer: 2 * 1024 * 1024,
-      }, (error, stdout) => {
-        const out = String(stdout || '')
-        let parsed = null
-        try { parsed = JSON.parse(out.trim()) } catch { try { parsed = JSON.parse(out.trim().split('\n').pop()) } catch { /* ignore */ } }
-        // card-share 的 ok 只是「点了分享按钮 + 看到某个成功信号」（toast／那行变「捎句话」／面板关掉），
-        //   属于**弱证据**：真到没到，交给 readbackCard 去消息列表核对。
-        resolve({
-          ok: !!(parsed && parsed.ok),
-          evidence: String((parsed && parsed.evidence) || ''),
-          error: String((parsed && parsed.error) || (error && error.message) || ''),
-        })
-      })
-    })
-  }
+  const shareCardTo = makeShareCardTo({
+    node: cfg.nodeBin || process.execPath,
+    script: cfg.shareScript,
+    env: () => ({ ...process.env, DOUYIN_HOME: (cfg.home || HOME) }),
+    peerName: ownerName,
+  })
 
   /**
    * 卡片送达回读：读一次和主人的会话，看「我发的」里有没有一张卡片（aweType 800）。
@@ -1877,7 +1898,7 @@ export function apply(ctx, config) {
     const node = cfg.nodeBin || process.execPath
     const script = cfg.sendScript
     return new Promise((resolve) => {
-      execFile(node, [script, '--to', String(peer || cfg.owner || ''), '--read'], {
+      execFile(node, [script, '--to', String(String(peer || '').trim() || ownerName()), '--read'], {
         env: { ...process.env, DOUYIN_HOME: (cfg.home || HOME) },
         timeout: 120000,
         maxBuffer: 4 * 1024 * 1024,
@@ -2236,10 +2257,10 @@ export function apply(ctx, config) {
         async execute(args, exec) {
           const text = String((args && args.text) || '').trim()
           if (!text) throw new Error('douyin_send 需要非空 text')
-          // 2026-11-18（陌生人视角复查）：没认领主人时 cfg.owner 是空的，以前会拿空昵称去开浏览器，
+          // 2026-11-18：没认领主人时（cfg.owner 和 owner.json 都没有昵称），以前会拿空昵称去开浏览器，
           //   最后报一句「在会话列表里没找到「」」—— 对方看不懂。这里先说清缺什么，也不白开浏览器。
-          if (!String(cfg.owner || '').trim()) {
-            return { ok: false, delivered: false, read: false, detail: '还没认领主人 —— 先走首次引导第 4 步（点开你和它的那条私信会话再点认领），否则不知道该发给谁' }
+          if (!ownerName()) {
+            return { ok: false, delivered: false, read: false, detail: NO_OWNER_MSG }
           }
           {
             const hits = guardOutbound(text)
@@ -2442,8 +2463,9 @@ export function apply(ctx, config) {
           //   现在的做法是照抄前端抓到的请求体：
           //     text = "@昵称 正文"，text_extra = [{user_id, sec_uid, type:0, start:0, end:昵称长度+1}]
           //   2026-10-25 实测：服务端原样保留 text_extra，@ 是真 @。
-          const who = String((args && args.name) || cfg.owner || '').trim()
-          if (!who) throw new Error('douyin_comment_at 需要知道 @ 谁（配置里的 owner 为空时请传 name）')
+          // 2026-11-18：以前只认 cfg.owner —— 认领过但配置里没填的老用户，这里会 @ 空昵称。
+          const who = String((args && args.name) || ownerName() || '').trim()
+          if (!who) throw new Error('douyin_comment_at 需要知道 @ 谁：' + NO_OWNER_MSG + '，或者直接传 name')
 
           // 公开评论三道闸（同 douyin_comment）：长度 / 禁止词 / 站外引导 / 去重 / 频次
           const gate = checkPublicComment({
@@ -2851,7 +2873,10 @@ export function apply(ctx, config) {
           const url = String((args && args.url) || '').trim()
           if (!url.includes('/video/')) throw new Error('douyin_share 需要含 /video/<id> 的视频链接')
           const aweme = awemeIdOf(url)
-          const peer = String((args && args.peer) || cfg.owner).trim()
+          // 2026-11-18：收件人同样走「cfg.owner → owner.json 昵称」这条兜底，
+          //   以前只认 cfg.owner，认领过但配置没填的人这里会把卡片发给空昵称。
+          const peer = String((args && args.peer) || ownerName() || '').trim()
+          if (!peer) throw new Error('douyin_share 不知道发给谁：' + NO_OWNER_MSG + '，或者传 peer')
           const node = cfg.nodeBin || process.execPath
           const script = cfg.shareScript
           const result = await new Promise((resolve) => {
@@ -3074,7 +3099,9 @@ export function apply(ctx, config) {
           // ⚠️ 发信人身份**从配置算**，不要在 prompt 里写死「发信人是主人」（坑 ⑱）：
           //    读取端目前只钉主人会话，但当 peer 和 owner 不是同一个名字时，
           //    写死就等于把陌生人当主人——那是现成的冒充口子。
-          const ownerNick = String(cfg.owner || '').trim()
+          // 2026-11-18：同一条兜底 —— 认领过但配置里没填 owner 的老用户，
+          //   以前这里算出来是空字符串，fromOwner 恒判成假（把主人当陌生人）。
+          const ownerNick = ownerName()
           const peerNick = String(cfg.peer || '').trim()
           const readSec = String((lastReadMeta && lastReadMeta.peer && lastReadMeta.peer.sec) || '')
           // 显示用的名字：优先用页面上的真实标题（这样没手填昵称也不会显示空）
@@ -3315,7 +3342,7 @@ export function apply(ctx, config) {
         if (cfg.autoScrollDeliverDm) {
           // 2026-11-18（陌生人视角复查）：没认领主人时 cfg.owner 是空串，往下走只会拿空昵称去分享/发私信，
           //   必然失败、还白启动一次浏览器。这里直接跳过并如实记日志 —— 不发任何东西（红线：没认领不对外动作）。
-          if (!String(cfg.owner || '').trim()) {
+          if (!ownerName()) {
             deliver = 'no-owner'
             log('自动刷：还没认领主人，这次挑到的 ' + picked.length + ' 条不发私信（去首次引导第 4 步认领，或在设置里填「发给谁」）')
           } else {
