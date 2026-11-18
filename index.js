@@ -193,6 +193,11 @@ const DEFAULTS = {
   //   'burst' = 一次刷完（全压在时间段开头）。以前是"凑够就一口气刷完"，不像人。
   autoScrollSpread: 'spread',
   autoScrollDeliverDm: true, // 结果私信发主人
+  // 2026-11-18（主人拍板）：结果用**视频分享卡片**发，不发「文字+长链接」。
+  //   'card'（默认）= 走 card-share.mjs 发真卡片（有封面、能直接点开）；
+  //   'text'        = 老的文字+链接。
+  //   卡片发失败或回读不到，自动退回文字链接兜底（见自动刷那段的 failed 分支）。
+  autoScrollDeliverAs: 'card',
   autoScrollWriteReport: false, // 写 Markdown 日报文件
   autoScrollReportDir: '', // 日报目录（空 = 当前工作区）
   // douyin_comment_at 不传 url 时用这个视频
@@ -452,7 +457,7 @@ export function apply(ctx, config) {
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
   // 2026-11-07：补上 peer / owner —— 这两个是「要盯的会话昵称」和「主人昵称」，
   //   以前根本不在白名单里，设置页就算发上来也会被写盘循环丢掉（issue #1 的根因）。
-  const TOGGLE_KEYS = ['enabled', 'peer', 'owner', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaPreset', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWhen', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollSpread', 'autoScrollDeliverDm', 'autoScrollWriteReport', 'autoScrollReportDir', 'subtitleOcr', 'shareCardMode', 'imageMode', 'probeHours', 'onboarded']
+  const TOGGLE_KEYS = ['enabled', 'peer', 'owner', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaPreset', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWhen', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollSpread', 'autoScrollDeliverDm', 'autoScrollDeliverAs', 'autoScrollWriteReport', 'autoScrollReportDir', 'subtitleOcr', 'shareCardMode', 'imageMode', 'probeHours', 'onboarded']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -1814,6 +1819,60 @@ export function apply(ctx, config) {
           ok: !!(parsed && parsed.ok && parsed.sent),
           readback: !!(parsed && parsed.readback),
           to: String((parsed && parsed.to) || peer || ''),
+          error: String((parsed && parsed.error) || (error && error.message) || ''),
+        })
+      })
+    })
+  }
+
+  /** 用抖音自己的「分享给朋友」把视频以**卡片**发给好友（card-share.mjs） */
+  function shareCardTo(awemeId, peer) {
+    const node = cfg.nodeBin || process.execPath
+    const script = cfg.shareScript
+    return new Promise((resolve) => {
+      execFile(node, [script, String(awemeId), String(peer || cfg.owner || '')], {
+        env: { ...process.env, DOUYIN_HOME: (cfg.home || HOME) },
+        timeout: 90000,
+        maxBuffer: 2 * 1024 * 1024,
+      }, (error, stdout) => {
+        const out = String(stdout || '')
+        let parsed = null
+        try { parsed = JSON.parse(out.trim()) } catch { try { parsed = JSON.parse(out.trim().split('\n').pop()) } catch { /* ignore */ } }
+        // card-share 的 ok 只是「点了分享按钮 + 看到某个成功信号」（toast／那行变「捎句话」／面板关掉），
+        //   属于**弱证据**：真到没到，交给 readbackCard 去消息列表核对。
+        resolve({
+          ok: !!(parsed && parsed.ok),
+          evidence: String((parsed && parsed.evidence) || ''),
+          error: String((parsed && parsed.error) || (error && error.message) || ''),
+        })
+      })
+    })
+  }
+
+  /**
+   * 卡片送达回读：读一次和主人的会话，看「我发的」里有没有一张卡片（aweType 800）。
+   * 2026-11-18 补：以前 card-share 只报「动作已执行」，被风控吞了也看不出来。
+   */
+  function readbackCard(peer, awemeId) {
+    const node = cfg.nodeBin || process.execPath
+    const script = cfg.sendScript
+    return new Promise((resolve) => {
+      execFile(node, [script, '--to', String(peer || cfg.owner || ''), '--read'], {
+        env: { ...process.env, DOUYIN_HOME: (cfg.home || HOME) },
+        timeout: 120000,
+        maxBuffer: 4 * 1024 * 1024,
+      }, (error, stdout) => {
+        const out = String(stdout || '')
+        let parsed = null
+        try { parsed = JSON.parse(out.trim()) } catch { try { parsed = JSON.parse(out.trim().split('\n').pop()) } catch { /* ignore */ } }
+        const msgs = Array.isArray(parsed && parsed.messages) ? parsed.messages : []
+        const tail = msgs.slice(-6)   // messages 旧的在前，最新的在最后
+        const hit = tail.find((m) => m && m.from === 'me'
+          && (Number(m.awe) === 800 || (awemeId && String(m.item || '') === String(awemeId))))
+        resolve({
+          ok: !!hit,
+          why: hit ? '' : (msgs.length ? '最近几条里没有我发的卡片' : '会话没读出来'),
+          detail: hit ? ('awe=' + (hit.awe || '?') + (hit.item ? ' item=' + hit.item : '')) : '',
           error: String((parsed && parsed.error) || (error && error.message) || ''),
         })
       })
@@ -3203,22 +3262,42 @@ export function apply(ctx, config) {
       const target = [...watched.keys()][0]
       if (!target) return
       busy = true
+      // 2026-11-18：哨兵要暂停到**投递完**，不只采集那一段 ——
+      //   发卡片要导航到视频页、回读要再开 /chat，哨兵一恢复就会把页面抢回私信页，卡片点不动。
+      pauseWatcher()
       try {
-        // 采集要在页面里跑 fetch，暂停哨兵；否则它把页面导航回 /chat，采集会挂住
-        pauseWatcher()
         let r
-        try {
-          r = await runPicker(Math.min(perDay, Math.max(1, runLimit)))
-        } finally {
-          resumeWatcher()
-        }
+        r = await runPicker(Math.min(perDay, Math.max(1, runLimit)))
         if (!r.ok) { log('自动刷：取候选失败 n=' + (r.items ? r.items.length : 0) + ' err=' + (r.error || '-') + ' raw=' + (r.raw || '-')); return }
         log('自动刷：取到 ' + r.items.length + ' 条候选')
         const picked = r.items.slice(0, Math.max(1, Math.min(perDay - st.count, burstRun ? runLimit : 1)))
-        const body = picked.map((it) => `${it.idx}. [${it.hot}] ${it.desc.slice(0, 60)}\n   ${it.url}`).join('\n\n')
         if (cfg.autoScrollDeliverDm) {
-          const sr = await sendChatText(target, `今天给你挑了 ${picked.length} 条：\n\n${body}`)
-          log('自动刷：私信 ' + (!sr.ok ? '发送失败（' + (sr.error || 'im-send 报错') + '）' : (sr.readback ? '已回读确认发出' : '已执行但回读没找到（可能被风控吞）')))
+          // 2026-11-18（主人拍板）：结果默认发**视频分享卡片**（有封面、点开就能看），
+          //   卡片发失败或回读不到，才退回「文字 + 长链接」兜底。
+          const asCard = String(cfg.autoScrollDeliverAs || 'card') === 'card'
+          const failed = []
+          if (asCard) {
+            for (const it of picked) {
+              const aid = awemeIdOf(it.url)
+              if (!aid) { failed.push(it); log('自动刷：这条没解析出 aweme id，改发文字'); continue }
+              const shar = await shareCardTo(aid, cfg.owner)
+              const rb = shar.ok ? await readbackCard(cfg.owner, aid) : { ok: false, why: shar.error || '分享动作没执行' }
+              log('自动刷：卡片 ' + aid + ' ' + (shar.ok
+                ? ('已执行（' + (shar.evidence || '信号未知') + '），回读' + (rb.ok ? '确认到达 ' + rb.detail : '没找到（' + rb.why + '）'))
+                : ('分享失败（' + (shar.error || '未知') + '）')))
+              if (!rb.ok) failed.push(it)
+            }
+          } else {
+            failed.push(...picked)
+          }
+          if (failed.length) {
+            const fbody = failed.map((it) => `${it.idx}. [${it.hot}] ${it.desc.slice(0, 60)}\n   ${it.url}`).join('\n\n')
+            const head = asCard
+              ? ('有 ' + failed.length + ' 条卡片没发出去，先发链接给你：\n\n' + fbody)
+              : ('今天给你挑了 ' + failed.length + ' 条：\n\n' + fbody)
+            const sr = await sendChatText(target, head)
+            log('自动刷：文字私信 ' + (!sr.ok ? '发送失败（' + (sr.error || 'im-send 报错') + '）' : (sr.readback ? '已回读确认发出' : '已执行但回读没找到（可能被风控吞）')))
+          }
         }
         if (cfg.autoScrollWriteReport) {
           try {
@@ -3236,6 +3315,7 @@ export function apply(ctx, config) {
       } catch (e) {
         log('自动刷失败：' + (e && e.message))
       } finally {
+        resumeWatcher()   // 不管成败都要把哨兵放回去（暂停跨了整个采集+投递）
         busy = false
       }
     }, 60_000)

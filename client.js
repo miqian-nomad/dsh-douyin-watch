@@ -1514,6 +1514,19 @@ window.__ModuleLoader__.load({
             }),
           ),
           h(Row, { label: '结果私信发给我' }, h(Switch, { checked: !!cfg.autoScrollDeliverDm, onChange: (v) => save({ autoScrollDeliverDm: v }) })),
+          // 2026-11-18（主人拍板）：发卡片还是发文字 —— 卡片有封面、点开就能看，长链接一屏 URL 太难看。
+          h(Row, {
+            label: '结果怎么发',
+            hint: '「视频卡片」= 带封面、点开就能看（默认）；「文字链接」= 一行文字加网址。卡片发不出去会自动退回文字链接。',
+          },
+            h('select', {
+              value: cfg.autoScrollDeliverAs === 'text' ? 'text' : 'card',
+              onChange: (e) => save({ autoScrollDeliverAs: e.target.value }),
+              style: Object.assign({}, ctlBase, { width: 200 }),
+            },
+              h('option', { value: 'card' }, '视频卡片（默认）'),
+              h('option', { value: 'text' }, '文字链接'),
+            )),
         ),
 
         h(Card, { title: '日报（可选）' },
