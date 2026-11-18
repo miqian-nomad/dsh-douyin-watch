@@ -144,19 +144,37 @@ process.env.DOUYIN_DEPS_ROOT = depsRoot()
   const ocrArgs = argv.includes('--ocr') ? ['--subtitle-ocr'] : []
   // 转写引擎：默认中文引擎（技能里那一套，纯 CPU、带标点）。--asr whisper 只在排障时用。
   const asrArgs = argv.includes('--asr-whisper') ? ['--asr', 'whisper'] : []
-  const pargs = VIDEO_IN
+  const buildArgs = (audioUrl) => (VIDEO_IN
     ? [pyScript, '--video', VIDEO_IN, '--out-dir', outDir, '--json', ...asrArgs, ...ocrArgs]
     : [
       pyScript,
       '--link', pageUrl,
       '--url', media.video,
-      ...(media.audio ? ['--audio-url', media.audio] : []),
+      ...(audioUrl ? ['--audio-url', audioUrl] : []),
       '--out-dir', outDir,
       '--json',
       ...asrArgs,
       ...ocrArgs,
-    ]
-  const pr = await run(py, pargs, 8 * 60 * 1000)
+    ])
+  let pr = await run(py, buildArgs(media.audio || ''), 8 * 60 * 1000)
+  let res = pickJSON(pr.stdout)
+
+  /**
+   * 2026-11-18：两种「看着像成功、其实是失败」的坑，一起兜住。
+   *   ① py 崩了会回 {"ok":false,"error":"RuntimeError: …"}；以前这里不看 res.ok，
+   *      直接当成"没人说话"报 ok:true —— 调用方以为视频没口播，其实是没跑成。
+   *   ② 有些作品的画面轨是**纯视频流**（ffprobe 只有 video），人声在独立音轨里。
+   *      这时 py 会回「提取音频失败（ffmpeg rc=-22）」。media-urls 现在会把那条
+   *      独立音轨一起带回来（audio_dash），拿它重试一次就正常。
+   */
+  const audioExtractFailed = (r) => !!(r && r.ok === false && /提取音频失败|ffmpeg/i.test(String(r.error || '')))
+  const dashAudio = String(media.audio_dash || '')
+  if (!VIDEO_IN && dashAudio && dashAudio !== String(media.audio || '') && audioExtractFailed(res)) {
+    steps.retry_with_dash_audio = true
+    pr = await run(py, buildArgs(dashAudio), 8 * 60 * 1000)
+    res = pickJSON(pr.stdout)
+  }
+
   // 机器上压根没有 Python 时，spawn 会直接失败，别把 ENOENT 抛给用户看
   if (pr.err && /ENOENT|not found|不是内部或外部命令/i.test(String(pr.err.message || pr.err.code || ''))) {
     out({
@@ -168,13 +186,13 @@ process.env.DOUYIN_DEPS_ROOT = depsRoot()
     })
     process.exit(1)
   }
-  const res = pickJSON(pr.stdout)
+  const tailOfStderr = () => String(pr.stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(-4).join(' ')
   // 2026-11-17：转写脚本崩了 / 被超时打断时，stdout 里没有 JSON → res 为空。
   //   以前这里没兜住，最后会在 Number(res.frame_count) 抛
   //   「Cannot read properties of null (reading 'frame_count')」——真正的错误
   //   （引擎没装好、pip 超时、Python 缺依赖）全在 stderr 里，被丢掉了。
   if (!res) {
-    const tail = String(pr.stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(-4).join(' ')
+    const tail = tailOfStderr()
     const timedOut = !!(pr.err && (pr.err.killed || pr.err.code === 'ETIMEDOUT'
       || /timeout|timed out|ETIMEDOUT/i.test(String(pr.err.message || ''))))
     out({
@@ -187,6 +205,20 @@ process.env.DOUYIN_DEPS_ROOT = depsRoot()
           + '过一会儿再试一次，装好之后就不用再下了。'
         : '转写脚本没跑出结果（多半是转写引擎还没装好）。')
         + (tail ? ' 细节：' + tail.slice(0, 300) : ' 这次没拿到细节输出。'),
+    })
+    process.exit(1)
+  }
+  // 2026-11-18：脚本自己说 ok:false 就别当成功。以前漏了这一步，
+  //   「提取音频失败（ffmpeg rc=-22）」会被报成「没检测到人声，也没抽到帧」的 ok:true。
+  if (res.ok === false) {
+    const tail = tailOfStderr()
+    out({
+      ok: false,
+      aweme_id: AWEME,
+      steps,
+      stage: res.stage,
+      error: String(res.error || '转写脚本报错了'),
+      hint: res.hint || (tail ? '细节：' + tail.slice(0, 300) : undefined),
     })
     process.exit(1)
   }
@@ -217,6 +249,18 @@ process.env.DOUYIN_DEPS_ROOT = depsRoot()
   const text = String(res.text || '')
   const frames = Number(res.frame_count) || 0
   const noSpeech = text.trim().length === 0
+  // 2026-11-18：一帧都没抽到、也没有一个字 —— 这不叫「没人说话」，这叫没跑成。
+  //   （正常作品至少能抽到 1 帧；0 帧 = ffmpeg 那边出问题了。）
+  if (frames === 0 && noSpeech) {
+    out({
+      ok: false,
+      aweme_id: AWEME,
+      steps,
+      error: '下载到了视频，但一帧都没抽出来、也没转出文字（多半是音轨或编码有问题）',
+      hint: '可以先用 --ocr 再跑一次；还不行就把视频下到本地用 --video <路径> 分析',
+    })
+    process.exit(1)
+  }
   const transcript = res.transcript || join(outDir, 'transcript.md')
   const sheet = res.contact_sheet || join(outDir, 'contact_sheet.jpg')
   // 硬字幕 OCR 结果：ASR 是"听"到的，这份是"看"到的，两条线互为校验

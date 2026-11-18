@@ -15,7 +15,11 @@
  *   node tools/media-urls.mjs --aweme <id> [--timeout 25]
  *   node tools/media-urls.mjs --link "https://www.douyin.com/video/<id>"
  *
- * 输出一行 JSON：{ ok, aweme_id, video, audio?, title?, author?, dur_text, source, tried }
+ * 输出一行 JSON：{ ok, aweme_id, video, audio?, audio_dash?, title?, author?, dur_text, source, tried }
+ *
+ * ⚠️ 2026-11-18：`audio` 是「背景音乐（music.play_url）」，`audio_dash` 是作品自带的
+ *   **独立音轨**（video.bit_rate_audio[].audio_meta.url_list）。有些作品的 play_addr
+ *   只有画面轨，人声只在 audio_dash 里 —— 两个字段别混着用。
  */
 import { openPage, sleep } from '../lib/chrome.mjs'
 
@@ -73,6 +77,17 @@ const DETAIL_JS = (aid) => `(async function(){
     //   人声在 music.play_url 那条 mp3 里。2026-10-28 实测：不给 audio 的话技能会卡在
     //   「提取音频失败（ffmpeg rc=-22）」，连带抽帧也不做，表现成"没画面也没人声"。
     var music = ((a.music || {}).play_url || {}).url_list || [];
+    // 独立音轨（DASH）：2026-11-18 实测凤凰网那条 23 分钟的作品，play_addr 只有
+    //   media-video-avc1 一条（ffprobe 只有 video），人声全在 bit_rate_audio 里。
+    //   不取它 → py 抽音频直接 ffmpeg rc=-22 → 表现成"没人声也没画面"。
+    var dashAudio = '';
+    var bra = v.bit_rate_audio || [];
+    for (var bi = 0; bi < bra.length && !dashAudio; bi++) {
+      var au = (bra[bi] && bra[bi].audio_meta && bra[bi].audio_meta.url_list) || null;
+      if (!au) continue;
+      if (Object.prototype.toString.call(au) === '[object Array]') dashAudio = au[0] || '';
+      else dashAudio = au.backup_url || au.fallback_url || ((au.url_list || [])[0]) || '';
+    }
     return JSON.stringify({
       ok: !!(pa.url_list && pa.url_list.length),
       http: r.status,
@@ -81,6 +96,7 @@ const DETAIL_JS = (aid) => `(async function(){
       dur_s: v.duration ? Math.round(v.duration / 1000) : 0,
       video: (pa.url_list || [])[0] || '',
       audio: music[0] || '',
+      audio_dash: dashAudio,
       music_dur: (a.music || {}).duration || 0,
       rates: rates.slice(0, 6)
     });
@@ -119,6 +135,9 @@ try {
         source: 'detail_api',
         video: pick && pick.url ? pick.url : d.video,
         audio: d.audio || undefined,
+        // 独立音轨：只在详情接口给出来时才有。analyze-video 会在
+        // 「抽音频失败」时用它重试一次（画面轨自带音轨的作品不会走到那条路）。
+        audio_dash: d.audio_dash || undefined,
         title: d.title || '',
         author: d.author || '',
         dur_text: d.dur_s ? String(d.dur_s) : '',

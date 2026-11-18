@@ -28,6 +28,7 @@ v3.2 相对 v3.1 的改动（都是为了让"新会话直接能用、不卡住"�
 from __future__ import annotations
 
 import argparse
+import atexit
 import glob
 import json
 import math
@@ -336,6 +337,98 @@ class ResolveError(RuntimeError):
     def __init__(self, message: str, hint: str = COOKIE_HINT):
         super().__init__(message)
         self.hint = hint
+
+
+# ----------------------------------------------------------------------------
+# 4.9 cookies 文件：先自己判格式，绝不把内容交给 yt-dlp 去打日志
+# ----------------------------------------------------------------------------
+# ⚠️ 2026-11-18 实测事故：`--cookies douyin_cookie.txt`（那是插件自己存的一整行原始
+#   cookie 串、不是 Netscape 格式）会让 yt-dlp 回
+#     skipping cookie file entry due to invalid length 1: '<整个文件内容>'
+#   —— 整串 cookie 连 sessionid 一起被打到 stdout/stderr 上（等于把账号所有权泄了）。
+#   从这里开始：非 Netscape 的文件先在这里转换；转不了就明确拒绝，**一个字符都不回显**。
+
+_COOKIE_TAB_FIELDS = 7
+
+
+def _looks_netscape_cookie_file(text: str) -> bool:
+    """有任意一行是 7 个 tab 字段的，就算 Netscape 格式。"""
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith('#'):
+            continue
+        if len(s.split('\t')) == _COOKIE_TAB_FIELDS:
+            return True
+    return False
+
+
+def _looks_raw_cookie_header(text: str) -> bool:
+    """`k=v; k2=v2` 这种一整行原始 cookie（插件自己的 douyin_cookie.txt 就是）。"""
+    s = text.strip()
+    if not s or '\t' in s or '\n' in s:
+        return False
+    return ('=' in s) and (';' in s)
+
+
+def _cookies_to_netscape(path: str) -> str:
+    """把 `--cookies` 指过来的文件整理成 yt-dlp 认的 Netscape 格式，返回可用路径。
+
+    绝不把 cookie 内容写进任何异常信息或日志（只报路径/条数之外的判断结果）。
+    """
+    p = Path(str(path))
+    if not p.exists():
+        raise ResolveError('--cookies 指的文件不存在', hint=COOKIE_HINT)
+    try:
+        text = p.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        raise ResolveError('--cookies 指的文件读不了（权限或编码问题）', hint=COOKIE_HINT) from None
+
+    if _looks_netscape_cookie_file(text):
+        return str(p)
+
+    if not _looks_raw_cookie_header(text):
+        raise ResolveError(
+            '--cookies 需要 Netscape 格式的 cookies.txt（每行 7 个 tab 字段）。'
+            '这个文件看起来不是，已中止；为了安全，没有把文件内容打印出来。',
+            hint=COOKIE_HINT,
+        )
+
+    lines = ['# Netscape HTTP Cookie File']
+    for part in text.strip().split(';'):
+        kv = part.strip()
+        if '=' not in kv:
+            continue
+        name, value = kv.split('=', 1)
+        name, value = name.strip(), value.strip()
+        if not name or not value:
+            continue
+        lines.append('\t'.join(['.douyin.com', 'TRUE', '/', 'TRUE', '1799999999', name, value]))
+    if len(lines) <= 1:
+        raise ResolveError('--cookies 文件里没解析出任何 cookie 键值对，已中止', hint=COOKIE_HINT)
+
+    tmp = Path(tempfile.gettempdir()) / f'dy-cookies-{os.getpid()}-{int(time.time())}.txt'
+    try:
+        tmp.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    except OSError:
+        raise ResolveError('转换 cookies 到临时文件失败', hint=COOKIE_HINT) from None
+    _TEMP_COOKIE_FILES.append(str(tmp))
+    return str(tmp)
+
+
+_TEMP_COOKIE_FILES: List[str] = []
+
+
+def _cleanup_temp_cookies() -> None:
+    """用完就删（里面是真凭据，别留在磁盘上）。"""
+    while _TEMP_COOKIE_FILES:
+        f = _TEMP_COOKIE_FILES.pop()
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+
+
+atexit.register(_cleanup_temp_cookies)
 
 
 # ============================================================================
@@ -1642,7 +1735,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     # 默认安静：取流策略链的中间信息不往 stdout 灌，避免污染 Agent 的上下文
     resolve_kw: Dict[str, Any] = {
-        'media_url': args.url, 'audio_url': args.audio_url, 'cookies': args.cookies,
+        'media_url': args.url, 'audio_url': args.audio_url, 'cookies': None,
         'cookies_from_browser': args.cookies_from_browser,
         'use_browser': not args.no_browser, 'browser_timeout': args.browser_timeout,
         'browser_profile': args.browser_profile, 'fresh_profile': args.fresh_profile,
@@ -1653,6 +1746,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not any([args.link, args.url, args.video]):
         print('错误：至少要给 --link / --url / --video 之一', file=sys.stderr)
         return EXIT_ENV
+
+    # cookies 先过格式闸：非 Netscape 的（比如插件自己那行原始 cookie 串）在这里转，
+    # 转不了就直接拒 —— 绝不能原样交给 yt-dlp，它会把这行内容打进日志。
+    if args.cookies:
+        try:
+            resolve_kw['cookies'] = _cookies_to_netscape(args.cookies)
+        except ResolveError as e:
+            print(f'\n[错误] {e}', file=sys.stderr)
+            print(e.hint, file=sys.stderr)
+            if args.json:
+                print(json.dumps({'ok': False, 'stage': 'cookies', 'error': str(e)},
+                                 ensure_ascii=False))
+            _cleanup_temp_cookies()
+            return EXIT_RESOLVE
 
     try:
         if args.action == 'info':
