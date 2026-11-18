@@ -32,12 +32,26 @@ test('时刻表：两套算法分开（开机一套，按时间段一套）', ()
 
 test('按时间段：段长 ÷ 条数 = 每格，每格随机取一个点（不套 5~20 分钟）', () => {
   assert.match(SRC, /const g = left \/ k/, '要按剩余段长均分')
-  assert.match(SRC, /at\(i \* g \+ Math\.random\(\) \* g\)/, '每格内随机取一点')
+  assert.match(SRC, /a \+ j \* g \+ Math\.random\(\) \* g/, '每格内随机取一点')
   assert.match(SRC, /const cap = Math\.max\(1, Math\.floor\(left \/ 60000\)\)/, '段装不下就今天少排，不硬塞')
   const i = SRC.indexOf('// ── ② 按时间段')
   assert.ok(i > 0, '找不到「按时间段」那一段')
   const winBlock = SRC.slice(i, SRC.indexOf('const schedSig', i))
   assert.equal(/5 \* 60000/.test(winBlock), false, '按时间段不许再套 5~20 分钟那条')
+})
+
+test('每个时间段自己填几条，外面的「每天最多」管所有段', () => {
+  assert.match(SRC, /autoScrollWindowPer:/, '要有「每段几条」的配置')
+  assert.match(SRC, /TOGGLE_KEYS\s*=\s*\[[^\]]*'autoScrollWindowPer'/, '漏了白名单，设置页存不进去')
+  assert.match(SRC, /const spare = Math\.max\(0, n - asked\)/, '没填条数的段要用剩下的额度')
+  assert.match(SRC, /Math\.min\(s\.per, n - acc\)/, '各段加起来超了总上限就按时间先后截断')
+  assert.match(UI, /这段看/, '设置页每段后面要有「这段看几条」')
+  assert.match(UI, /autoScrollWindowPer:/, '保存时要把每段条数一起写进去')
+})
+
+test('设置页写明「今天已经刷了几条」', () => {
+  assert.match(SRC, /autoScrollTodayCount/, '接口要给出今天已刷数')
+  assert.match(UI, /今天已经刷了/, '「每天最多刷几条」那条要把今天已刷数写出来')
 })
 
 test('改完时段/条数，今天的表跟着重排', () => {

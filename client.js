@@ -1045,7 +1045,11 @@ window.__ModuleLoader__.load({
           const c = d.config || {};
           setCfg(c);
           setStatus(c.status || null);
-          setRows((Array.isArray(c.autoScrollWindows) ? c.autoScrollWindows : []).map(parseWin));
+          setRows((Array.isArray(c.autoScrollWindows) ? c.autoScrollWindows : []).map((w, i) => {
+            const r = parseWin(w);
+            r.per = Math.max(0, Number((Array.isArray(c.autoScrollWindowPer) ? c.autoScrollWindowPer : [])[i]) || 0);
+            return r;
+          }));
         })
         .catch(() => setNote('读配置失败：接口没返回（宿主报错，见 DSH 日志）'));
       useEffect(() => {
@@ -1131,7 +1135,12 @@ window.__ModuleLoader__.load({
 
       const commit = (next) => {
         setRows(next);
-        save({ autoScrollWindows: next.filter((r) => r.start && r.end).map((r) => r.start + '-' + r.end) });
+        const good = next.filter((r) => r.start && r.end);
+        save({
+          autoScrollWindows: good.map((r) => r.start + '-' + r.end),
+          // 2026-11-18：每段自己几条，和上面同下标（0 = 不单独限）
+          autoScrollWindowPer: good.map((r) => Math.max(0, Number(r.per) || 0)),
+        });
       };
 
       const timeSel = (i, part) => {
@@ -1486,6 +1495,7 @@ window.__ModuleLoader__.load({
           h('div', { style: { padding: '10px 0 6px' } },
             h('div', { style: { fontSize: 13, color: C.text } }, '自动跑的时间段'),
             h('div', { style: { fontSize: 12, color: C.text3, marginTop: 2 } }, '时、分分别选；跨半夜也行，比如 18:30 到第二天 09:00'),
+            h('div', { style: { fontSize: 12, color: C.text3, marginTop: 2 } }, '每段后面填「这段看几条」：不填就用「每天最多」剩下的额度按段长分。'),
             (cfg.autoScrollWhen === 'window' ? null : h('div', { style: { fontSize: 12, color: '#b26a00', marginTop: 4 } },
               '现在是「开机就刷」，下面这几段不起作用。要按它来，把上面的「什么时候刷」改成「按设定时间段」。')),
             h('div', { style: { marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 } },
@@ -1493,6 +1503,19 @@ window.__ModuleLoader__.load({
                 timeSel(i, 'start'),
                 h('span', { style: { fontSize: 12, color: C.text3 } }, '到'),
                 timeSel(i, 'end'),
+                // 2026-11-18（主人要的）：这个时间段里看几条
+                h('span', { style: { fontSize: 12, color: C.text3, marginLeft: 4 } }, '这段看'),
+                h('input', {
+                  type: 'number', min: 0, max: 30, value: r.per || '',
+                  placeholder: '不限',
+                  onChange: (e) => {
+                    const next = rows.slice();
+                    next[i] = Object.assign({}, next[i], { per: Math.max(0, Number(e.target.value) || 0) });
+                    commit(next);
+                  },
+                  style: Object.assign({}, ctlBase, { width: 64, textAlign: 'right' }),
+                }),
+                h('span', { style: { fontSize: 12, color: C.text3 } }, '条'),
                 h('button', {
                   type: 'button',
                   onClick: () => commit(rows.filter((_, j) => j !== i)),
@@ -1501,12 +1524,16 @@ window.__ModuleLoader__.load({
               )),
               h('button', {
                 type: 'button',
-                onClick: () => commit(rows.concat([{ start: '', end: '' }])),
+                onClick: () => commit(rows.concat([{ start: '', end: '', per: 0 }])),
                 style: Object.assign({}, ctlBase, { marginTop: 2, width: 'auto', alignSelf: 'flex-start', padding: '0 12px', cursor: 'pointer', color: C.text2 }),
               }, '+ 添加时间段'),
             ),
           ),
-          h(Row, { label: '每天最多刷几条', hint: '填 0 = 不自动刷' },
+          h(Row, {
+            label: '每天最多刷几条',
+            hint: '所有时间段加起来的上限；填 0 = 不自动刷'
+              + (Number(cfg.autoScrollTodayCount) > 0 ? '。今天已经刷了 ' + cfg.autoScrollTodayCount + ' 条，刷到上限今天就不再刷' : ''),
+          },
             h('input', {
               type: 'number', min: 0, max: 50, value: cfg.autoScrollPerDay,
               onChange: (e) => save({ autoScrollPerDay: Number(e.target.value) }),

@@ -188,6 +188,9 @@ const DEFAULTS = {
   //   'window'       = 只在下面 autoScrollWindows 圈定的时段里刷。
   autoScrollWhen: 'uptime',
   autoScrollWindows: [], // 自动跑的时间段，可增删（只在 when='window' 时用；空 = 不限定）
+  // 2026-11-18（主人要的）：和上面**同下标** —— 每个时间段自己看几条。
+  //   0 = 这段不单独限，用「每天最多」剩下的额度按段长比例分。
+  autoScrollWindowPer: [],
   autoScrollPerDay: 5, // 每天最多挑几条（0 = 不跑）
   // 2026-11-17：这几条怎么摊在时间段里。'spread'（默认）= 均匀摊开、每段随机一个时刻；
   //   'burst' = 一次刷完（全压在时间段开头）。以前是"凑够就一口气刷完"，不像人。
@@ -461,7 +464,7 @@ export function apply(ctx, config) {
   // ── 设置页接口：/api/douyin-watch/config（GET 读 / POST 写，立即生效）──
   // 2026-11-07：补上 peer / owner —— 这两个是「要盯的会话昵称」和「主人昵称」，
   //   以前根本不在白名单里，设置页就算发上来也会被写盘循环丢掉（issue #1 的根因）。
-  const TOGGLE_KEYS = ['enabled', 'peer', 'owner', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaPreset', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWhen', 'autoScrollWindows', 'autoScrollPerDay', 'autoScrollSpread', 'autoScrollDeliverDm', 'autoScrollDeliverAs', 'autoScrollAgentRead', 'autoScrollWriteReport', 'autoScrollReportDir', 'subtitleOcr', 'shareCardMode', 'imageMode', 'probeHours', 'onboarded']
+  const TOGGLE_KEYS = ['enabled', 'peer', 'owner', 'intervalSeconds', 'maxWakeText', 'ownerAutoReply', 'replyMode', 'personaPreset', 'personaPublic', 'personaBannedWords', 'commentMaxChars', 'commentPerHour', 'commentPerDay', 'commentDedupeHours', 'commentAutoReply', 'commentAutoReplyWork', 'commentAutoReplyOthers', 'commentScanMinutes', 'commentMaxPerRound', 'commentNoticeMaxAgeHours', 'commentWorkMaxAgeDays', 'commentSkipNicks', 'commentSkipPureMention', 'myWorks', 'strangerPolicy', 'sessionId', 'autoScrollEnabled', 'autoScrollWhen', 'autoScrollWindows', 'autoScrollWindowPer', 'autoScrollPerDay', 'autoScrollSpread', 'autoScrollDeliverDm', 'autoScrollDeliverAs', 'autoScrollAgentRead', 'autoScrollWriteReport', 'autoScrollReportDir', 'subtitleOcr', 'shareCardMode', 'imageMode', 'probeHours', 'onboarded']
   try {
     ctx.effect(() => ctx.webServer.register({
       kind: 'prefix',
@@ -495,6 +498,8 @@ export function apply(ctx, config) {
           } catch { return 'headless' }
         }
         const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; o.claim = readOwnerClaim(); o.browserMode = browserModeNow(); o.dataDir = String(cfg.home || HOME); o.commentScanMinutes = Math.min(120, Math.max(5, Number(cfg.commentScanMinutes) || 10));
+        // 2026-11-18：设置页要显示「今天已经刷了几条」，不然改「每天最多」时不知道还剩多少额度
+        try { const ps = readPickerState(); o.autoScrollTodayCount = Number(ps.count) || 0; o.autoScrollTodayDate = String(ps.date || '') } catch { o.autoScrollTodayCount = 0; o.autoScrollTodayDate = '' }
         // 2026-11-07：状态卡要显示"回复发到哪个对话"的真名字（不是"下拉里选的那个"）
         if (cfg.sessionId) {
           try {
@@ -1927,38 +1932,40 @@ export function apply(ctx, config) {
   }
   function writeSched(s) { try { writeFileSync(schedFile(), JSON.stringify(s, null, 2)) } catch { /* 写不了不影响这一轮 */ } }
 
-  /** 把 'HH:MM-HH:MM' 展开成今天的毫秒区间（支持跨零点，跨到明天） */
-  function expandWindows(wins) {
+  /** 把 'HH:MM-HH:MM' 展开成今天的毫秒区间（支持跨零点，跨到明天），并带上「这段自己看几条」 */
+  function expandWindows(wins, pers) {
     const base = new Date(); base.setHours(0, 0, 0, 0)
     const dayStart = base.getTime()
     const toMin = (s) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : null }
     const out = []
-    for (const w of wins) {
-      const p = String(w).split('-')
+    for (let i = 0; i < wins.length; i++) {
+      const p = String(wins[i]).split('-')
       const a = toMin(p[0]); const b = toMin(p[1])
       if (a == null || b == null) continue
       const s = dayStart + a * 60000
       let e = dayStart + b * 60000
       if (e <= s) e += 24 * 3600 * 1000     // 跨零点：18:00-09:00 这种
-      out.push({ s, e })
+      out.push({ s, e, per: Math.max(0, Number(pers[i]) || 0) })
     }
     return out.filter((x) => x.e > x.s).sort((x, y) => x.s - y.s)
   }
 
   /**
-   * 今天的时刻表。上限一律是"一天最多刷几条"（用户填的）。
-   *   ① 开机自动刷：没有上下界 —— 起点 = 开机后随机等 10~30 分钟；间隔 = 每条随机 5~20 分钟。
-   *   ② 按时间段刷：上下界已经定了 —— 剩余段长 ÷ 条数 = 每格，每格随机取一个点。
-   *      段已经过去一半也从现在起按剩余时间均分；剩的时间连 1 分钟一条都放不下，就今天少排几条。
-   *   ③ 'burst'（一次刷完）= 全压在第一个还在的段的开头，每条隔 1~2 分钟。
+   * 今天的时刻表。两层上限（2026-11-18 主人定）：
+   *   · 每个时间段可以单独填「这段看几条」（autoScrollWindowPer，和 autoScrollWindows 同下标）；
+   *   · autoScrollPerDay 是所有段加起来的天花板。
+   *   ① 开机自动刷：没有上下界 —— 开机后随机等 10~30 分钟起，之后每条随机隔 5~20 分钟。
+   *   ② 按时间段刷：段长 ÷ 该段条数 = 每格，每格随机取一个点，条条都在段内。
+   *      没填条数的段，用「天花板 - 已填」剩下的额度按段长比例分；
+   *      各段加起来超过天花板，按时间先后截断（先来的段优先）。
    */
   function buildSlotTimes(perDay) {
     const n = Math.max(1, perDay)
     const burst = String(cfg.autoScrollSpread || 'spread') === 'burst'
-    // 只有选了「按时间段刷」才用时段；「开机就刷」一律当没配时段。
     const byWindow = String(cfg.autoScrollWhen || 'uptime') === 'window'
     const wins = byWindow ? (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).filter(Boolean) : []
-    const segs = wins.length ? expandWindows(wins) : []
+    const pers = Array.isArray(cfg.autoScrollWindowPer) ? cfg.autoScrollWindowPer : []
+    const segs = wins.length ? expandWindows(wins, pers) : []
     if (byWindow && wins.length && !segs.length) log('自动刷：时间段都解析不出来（' + wins.join(',') + '），先按开机就刷走')
 
     if (!segs.length) {
@@ -1974,40 +1981,49 @@ export function apply(ctx, config) {
       return out
     }
 
-    // ── ② 按时间段：上下界是用户给的，只在这段里排 ──
-    const now = Date.now()
-    const live = segs.filter((s) => s.e > now)
-    const left = live.reduce((a, s) => a + (s.e - Math.max(s.s, now)), 0)
-    if (left <= 0) return []              // 今天的段全过去了，今天不刷
-    const at = (offset) => {              // 剩余时间轴上的偏移 → 真实时刻
-      let acc = 0
-      for (const s of live) {
-        const a = Math.max(s.s, now)
-        const len = s.e - a
-        if (offset < acc + len) return a + (offset - acc)
-        acc += len
-      }
-      return live[live.length - 1].e
+    // ── ② 按时间段：先定每段几条，再在段内均分 ──
+    const asked = segs.reduce((a, s) => a + s.per, 0)
+    const blanks = segs.filter((s) => !s.per)
+    const spare = Math.max(0, n - asked)
+    if (blanks.length && spare > 0) {
+      const lenAll = blanks.reduce((a, s) => a + (s.e - s.s), 0) || 1
+      for (const s of blanks) s.per = Math.max(0, Math.round(spare * ((s.e - s.s) / lenAll)))
     }
+    let acc = 0
+    const plan = segs.map((s) => { const take = Math.max(0, Math.min(s.per, n - acc)); acc += take; return take })
+    const wantSum = plan.reduce((a, b) => a + b, 0)
+    if (!wantSum) return []              // 一条额度都没有，今天不排
+
+    const now = Date.now()
+    const hm = (ms) => new Date(ms).toTimeString().slice(0, 5)
+    const out = []
     if (burst) {
       // 一次刷完：全压在第一个还在的段的开头，每条隔 1~2 分钟
-      let t = Math.max(live[0].s, now) + 60000
-      const out = []
-      for (let i = 0; i < n; i++) { out.push(Math.round(t)); t += 60000 + Math.random() * 60000 }
+      const idx = segs.findIndex((s, i) => plan[i] > 0 && s.e > now)
+      if (idx < 0) return []
+      let t = Math.max(segs[idx].s, now) + 60000
+      for (let i = 0; i < wantSum; i++) { out.push(Math.round(t)); t += 60000 + Math.random() * 60000 }
       return out
     }
-    // 摊开：段长 ÷ 条数 = 每格，每格随机取一个点
-    const cap = Math.max(1, Math.floor(left / 60000))   // 一格最少 1 分钟，否则不如连刷
-    const k = Math.min(n, cap)
-    if (k < n) log('自动刷：今天这段时间只够摊 ' + k + ' 条（你设了 ' + n + ' 条），今天先按 ' + k + ' 条排')
-    const g = left / k
-    const out = []
-    for (let i = 0; i < k; i++) out.push(Math.round(at(i * g + Math.random() * g)))
+    for (let i = 0; i < segs.length; i++) {
+      const cnt = plan[i]
+      if (!cnt) continue
+      const seg = segs[i]
+      const a = Math.max(seg.s, now)
+      const left = seg.e - a
+      if (left <= 0) continue                       // 这段已经过去了
+      const cap = Math.max(1, Math.floor(left / 60000))   // 一格最少 1 分钟
+      const k = Math.min(cnt, cap)
+      if (k < cnt) log('自动刷：' + hm(seg.s) + '–' + hm(seg.e) + ' 这段只够摊 ' + k + ' 条（填了 ' + cnt + ' 条）')
+      const g = left / k
+      for (let j = 0; j < k; j++) out.push(Math.round(a + j * g + Math.random() * g))
+    }
     return out
   }
-  /** 配置签名：改完时段/条数/方式，今天的表要跟着重排（不然改完今天还是照旧） */
+  /** 配置签名：改完时段/每段条数/总上限/方式，今天的表要跟着重排 */
   const schedSig = () => [String(cfg.autoScrollWhen || 'uptime'),
     (Array.isArray(cfg.autoScrollWindows) ? cfg.autoScrollWindows : []).join(','),
+    (Array.isArray(cfg.autoScrollWindowPer) ? cfg.autoScrollWindowPer : []).join(','),
     String(cfg.autoScrollPerDay || 0),
     String(cfg.autoScrollSpread || 'spread')].join('|')
   /** 到点该跑的那一条；没到点返回 null */
