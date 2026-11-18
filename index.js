@@ -3323,12 +3323,16 @@ export function apply(ctx, config) {
               if (ap.ok) say = String(ap.transcript || '').replace(/\s+/g, ' ').slice(0, 1500)
               else log('自动刷：转写失败 ' + (ap.error || (ar.error && ar.error.message) || '-'))
             } catch (e) { log('自动刷：转写出错 ' + ((e && e.message) || e)) }
-            const prompt = '我刚从推荐流刷到这条，你看看值不值得看，跟主人讲一句：\n'
+            const prompt = '我刚从推荐流刷到这条，已经分享给主人了：\n'
               + '标题：' + one.desc + '\n链接：' + one.url + '\n'
               + (say
                 ? ('\n它的原话（本地转写，可能有错字）：\n' + say + '\n')
-                : '\n（这条没转出文字，只能凭标题判断，别编内容。）\n')
-              + '\n用 douyin_send 发给主人：两三句话说清它讲了什么、值不值得看。别复述全文，别写小作文。'
+                : '\n（这条没转出文字，只能凭标题说，别编内容。）\n')
+              // 2026-11-18 主人纠正：已经分享了，就别说「值不值得看」—— 那是把决定推回去。
+              //   要像给朋友安利：讲清它是什么内容、哪一处最抓人。
+              + '\n用 douyin_send 跟主人说两三句，像给朋友安利一条好片那样：'
+              + '这条讲的是什么、哪一处最抓人（具体到某句话、某个场面、某个反转）。'
+              + '不要说「值不值得看」——已经分享了；也别复述全文、别写小作文。'
             try {
               tgtAgent.followup(makeUserMessage(prompt))
               log('自动刷：已叫醒它自己看（followup' + (say ? '，带 ' + say.length + ' 字台词' : '，无台词') + '）')
