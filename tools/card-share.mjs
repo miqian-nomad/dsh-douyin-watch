@@ -36,6 +36,35 @@ const chromed = _c.status
 const { send, ev } = _c
 
 /**
+ * 2026-11-28（真凶找到了）：attach 到的标签如果是**后台标签**（不是窗口当前选中的那个），
+ *   它的生命周期是 paused、document.hasFocus() 是 false，抖音的分享面板（React 受控弹层）
+ *   就不渲染 —— 实测同一段 hover 代码：
+ *     · 后台标签：派发事件成功（hitSelf:true），但 12 秒内面板一个字都没有；
+ *     · 同一标签补上下面两针：外壳 869ms 出现、含好友列表的完整面板 1456ms 出现；
+ *     · 窗口被别的窗口挡住（visibilityState=hidden）但它是选中标签时：照常几秒出全。
+ *   所以问题不是"实例错了"、也不是笼统的"窗口在后台"，而是"这个 target 没被当成活动页"。
+ *
+ * ⚠️ 只放在本脚本里，不放进 connectPage：这两针是 per-target 的，改的是这个页面的焦点语义，
+ *    读私信 / 读评论那些脚本不需要它，也不该替它们改变页面状态（不许改动其它脚本的既有行为）。
+ *    断开 CDP 即失效，不写任何持久状态。
+ */
+async function wakeTargetForHover() {
+  const r = { lifecycle: '', focus: '' }
+  try { await send('Page.setWebLifecycleState', { state: 'active' }); r.lifecycle = 'ok' }
+  catch (e) { r.lifecycle = String((e && e.message) || e).slice(0, 100) }
+  try { await send('Emulation.setFocusEmulationEnabled', { enabled: true }); r.focus = 'ok' }
+  catch (e) { r.focus = String((e && e.message) || e).slice(0, 100) }
+  return r
+}
+
+/** 当前页的可见性/焦点，失败时只回报错，不打断主流程（排查用） */
+async function pageVis() {
+  try {
+    return JSON.parse(await ev(`JSON.stringify({vis:document.visibilityState, focus:document.hasFocus(), w:innerWidth, h:innerHeight})`))
+  } catch (e) { return { error: String((e && e.message) || e).slice(0, 100) } }
+}
+
+/**
  * ⚠️ 2026-10-25 实测：`Input.dispatchMouseEvent`（原生鼠标）在这个 Chrome + 抖音页面上不可靠 ——
  *   ① 分享图标**在视口外**时（窗口内容高 631、图标 top=634），坐标命不中任何元素，
  *      `elementFromPoint(x,y)` 返回 null，hover 一次都不会发生 → 面板永远不展开；
@@ -98,21 +127,53 @@ try {
   }
   if (!pos.x) { out({ ok: false, error: '找不到分享图标（视频页 20 秒内没加载好）' }); process.exit(1) }
 
+  // 2026-11-28：hover 之前先让这个 target 被当成「活动页」（理由见 wakeTargetForHover 的注释）
+  const wake = await wakeTargetForHover()
+  const vis = await pageVis()
+
   // 页面内派发 hover（原生鼠标事件不生效；图标还常在视口外，坐标 hover 根本无从谈起）
   const hv = JSON.parse(await hoverShareIcon())
-  if (!hv.ok) { out({ ok: false, error: '分享图标 hover 失败', detail: hv }); process.exit(1) }
-  // 面板是异步渲染的，而且分两截：外壳（"复制链接"）先出现，"分享给朋友 + 好友列表"后到。
-  //   2026-10-25 实测：只等"有文字"会读到半截面板（只有"复制链接"），于是误报"找不到该好友那一行"。
-  //   所以等到**好友那一行**出现为止。
+  if (!hv.ok) { out({ ok: false, error: '分享图标 hover 失败', detail: hv, wake, vis }); process.exit(1) }
+
+  // 面板分两截：外壳（只有"复制链接"）先出现，"分享给朋友 + 好友列表"后到。
+  //   2026-11-28 改成分两段等、总预算 20 秒（原来一口气等 12 秒）：
+  //     ① 等外壳：8 秒；② 等外壳填字：最多再 4 秒；③ 等「好友那一行」：到总预算 20 秒。
+  //   三种失败分开报，别再糊成一句「分享面板没展开（或有壳没内容）」——
+  //   现场一眼就能分清是 target 没被激活、还是登录/风控、还是纯慢。
+  const SHELL_MS = 8000
+  const FILL_MS = 4000
+  const TOTAL_MS = 20000
+  const TICK = 250
+  const t0 = Date.now()
   let ps = JSON.parse(await panelState())
-  for (let i = 0; i < 24 && (!ps.text || ps.text.indexOf(WHO) < 0); i++) {
-    await sleep(500)
-    ps = JSON.parse(await panelState())
+  const shellUp = () => !!(ps && ps.exists && (ps.text || ps.open))
+  while (!shellUp() && Date.now() - t0 < SHELL_MS) { await sleep(TICK); ps = JSON.parse(await panelState()) }
+  if (!shellUp()) {
+    out({
+      ok: false,
+      error: '分享面板完全没出现：hover 之后 ' + (SHELL_MS / 1000) + ' 秒内连外壳都没有（大概率是这个标签没被激活、或页面还没加载好）',
+      hover: hv, wake, vis, panel: ps,
+    })
+    process.exit(1)
   }
-  if (!ps.text) { out({ ok: false, error: '分享面板没展开（或有壳没内容）', hover: hv, panel: ps }); process.exit(1) }
+  while (!ps.text && Date.now() - t0 < SHELL_MS + FILL_MS) { await sleep(TICK); ps = JSON.parse(await panelState()) }
+  if (!ps.text) {
+    out({
+      ok: false,
+      error: '分享面板有壳没内容：外壳出来了（' + (ps.childW || 0) + 'x' + (ps.childH || 0) + '），但 ' + ((SHELL_MS + FILL_MS) / 1000) + ' 秒内没有任何可读内容',
+      hover: hv, wake, vis: await pageVis(), panel: ps,
+    })
+    process.exit(1)
+  }
+  // ③ 等「好友那一行」（只有它出现，后面拿 sec_uid 才有意义）
+  while (ps.text.indexOf(WHO) < 0 && Date.now() - t0 < TOTAL_MS) { await sleep(TICK); ps = JSON.parse(await panelState()) }
   const panel = ps.text
   if (panel.indexOf(WHO) < 0) {
-    out({ ok: false, error: '分享面板里没出现该好友（好友列表没加载出来，可能没登录/被风控）', panel })
+    out({
+      ok: false,
+      error: '好友列表 ' + (TOTAL_MS / 1000) + ' 秒没来：面板开了，但里面没有「' + WHO + '」这一行（可能没登录 / 被风控 / 不在最近分享列表）',
+      panel, hover: hv, wake, vis: await pageVis(),
+    })
     process.exit(1)
   }
 
@@ -217,7 +278,7 @@ try {
   }
   const b = cands[0].btn
   const target = { nick: WHO, sec_uid: cands[0].sec_uid || TOID || '' }
-  if (DRY) { out({ ok: true, dry: true, panel, btn: b, target, chrome: chromed, matched_by: TOID ? 'sec_uid' : 'nickname(唯一)' }); _c.close(); process.exit(0) }
+  if (DRY) { out({ ok: true, dry: true, panel, btn: b, target, chrome: chromed, matched_by: TOID ? 'sec_uid' : 'nickname(唯一)', wake, vis }); _c.close(); process.exit(0) }
 
   // 点「分享」：同样必须页面内派发（原生点击不触发 React），
   //   而且按「那一行」找按钮本体，不靠坐标 —— 面板比视口高时，底下几行是点不到的。
@@ -291,7 +352,7 @@ try {
     if (!a.panelStillOpen) { evidence = 'panel-closed'; break }
   }
   const sent = evidence !== 'none'
-  out({ ok: sent, sent, aweme_id: AID, to: WHO, target, evidence, panel, clicked, chrome: chromed, after: a })
+  out({ ok: sent, sent, aweme_id: AID, to: WHO, target, evidence, panel, clicked, chrome: chromed, after: a, wake })
 } catch (e) {
   out({ ok: false, error: String(e?.message ?? e) })
 } finally {
