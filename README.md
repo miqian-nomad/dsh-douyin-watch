@@ -130,7 +130,7 @@
 
 ## 设置页怎么看
 
-- **运行状态**：绿点=在跑；四格分别是「今日评论额度 / 最后读取 / 签名直连 / 最后唤醒」。
+- **运行状态**：绿点=在跑；四格分别是「今天已回评论 / 最后一次看消息 / 最后一次收到私信 / 回复发到哪个对话」，下面一行还写着**家目录和日志的实际位置**（装歪了一眼能看见）。
 - **私信哨兵**：盯谁、多久读一次、要不要自动回。
 - **自动刷视频**：可选，按时间段自己挑视频。
 - **人设**：人设库（内置三套 + 自己导入），选中哪套就挂进被唤醒的那条会话；换完下一条消息就生效。
@@ -146,7 +146,7 @@
 | 评论发出去没反应 | 被当成机器人 | 降频；同一句会被去重闸拦住 |
 | 弹「验证码中间页」 | 无头被反爬拦了 | 维护 →「切有头 + 触发验证」，人工过一次再切回 |
 | 读楼中楼很慢（十几秒） | 没装签名直连 | 见下方「可选：签名直连」 |
-| 工具突然消失 | 切换有头/无头导致插件重挂 | 改 `cordis.patch.yml` 里 `reloadNote` 的值触发重挂 |
+| 工具突然消失 | 多半是宿主重挂了插件，跟切有头/无头无关（插件自己拉 Chrome，见「架构」） | 重启 DSH 最稳。（`reloadNote` 那套触发重挂的机制**待核实**，先别依赖它） |
 
 ## 可选：签名直连（更快，不装也能用）
 
@@ -167,7 +167,7 @@
 ## 🔴 先看这个（凭据与开关，2026-10-24 加固）
 
 - **`douyin_cookie.txt` 是密码级凭据**：含 HttpOnly `sessionid`，拿到它 = 拿到这个抖音账号。
-  位置：`DOUYIN_HOME`（或 `~/.dsh/douyin-duty`、或配置里的 `home`）。`cookie-save.mjs` 保存后会
+  位置：配置 `home` 指向的目录（宿主会把它注入成 `DOUYIN_HOME`）；没配时按 `DOUYIN_HOME` → `DSH_HOME/douyin-duty` → `~/.dsh/douyin-duty` 回落。`cookie-save.mjs` 保存后会
   **自动收紧权限**（Windows `icacls /inheritance:r`，只留当前用户/SYSTEM/Administrators；其它平台 `chmod 600`）。
   别把它 copy 进仓库、别贴进聊天、别放网盘。
 - **配置接口有守卫**：`/api/douyin-watch/config` 拒绝跨站请求（挡 CSRF），并且**写操作只认本机回环**——
@@ -184,16 +184,16 @@
 
 抖音账号一旦切换，或操作频繁，就会弹**二次验证**；无头模式下视频页还会弹「**验证码中间页**」反爬。**完整解法**：
 
-1. 无头被拦（登出 / 验证码中间页）→ **切到有头模式**（改 `dsh-browser-playwright.state.json` 的 `headless: false`，或 DSH 设置里开）
-2. 在有头窗口里**手动登录 + 完成二次验证 + 发一次评论**
-3. **切回无头** → 验证已清，@ 就能正常发了
+1. 被拦（登出 / 验证码中间页）→ 设置页 → **维护 →「切有头 + 触发验证」**（等价于把家目录里 `browser-mode.json` 的 `mode` 改成 `headed`）
+2. 在弹出的窗口里**手动登录 + 完成二次验证 + 发一次评论**
+3. 过完再**切回去**（一般切回无头）→ 验证已清，@ 就能正常发了
 
 ⚠️ 两个副作用，务必知道：
 
-- **切有头/无头时，DSH 的 browser 服务会短暂 inactive → 抖音插件的工具被「移除」（GUI 提示「移除 10 个」）**。恢复办法：改 `cordis.patch.yml` 里 `- id: douyin-watch` 的 `reloadNote` 值触发重挂载（这是目前唯一不用重启 DSH 就能让工具回来的办法；直接改配置值，别只加注释——注释不触发）。
+- **切有头/无头只是重启「插件自己那个 Chrome」**，不动宿主，也不会让工具消失（插件不依赖 DSH 的 browser 服务，见「架构」）。代价是切换那 10~30 秒读不到私信。真要重挂插件，重启 DSH 最稳。
 - **登录态备份/恢复**：`douyin_save_login`（把当前 cookie 存进 `douyin_cookie.txt`，含 HttpOnly）→ `douyin_relogin`（灌回）。换账号后先 save 一次，无头登出时 relogin 即可，不用手动再登。
 
-1. **改 `index.js` 必须重启 DSH 才生效**。`cordis.patch.yml` 的配置是 `patchReload: live`（热重载），但 **JS 代码不是**——热重载即使重新 import 了模块，工具也会撞 `already registered in this scope`，等于没生效。所以改代码 → 重启。
+1. **改 `index.js` 必须重启 DSH 才生效**。`cordis.patch.yml` 的配置是热重载（⚠️ 待核实：`patchReload` 这个键在模板里并不存在），但 **JS 代码不是**——热重载即使重新 import 了模块，工具也会撞 `already registered in this scope`，等于没生效。所以改代码 → 重启。
 
 2. **评论区还是老 Draft.js，别误判。** 评论编辑器是 `.public-DraftEditor-content`（**点开评论框才渲染**，点开前查是 0 个）；mention chip 是 `douyin_mention_word`。看到 `editor-kit-container` / `messageEditorinputArea` / `messageMsgInputmentionContainer` 这些是**私信聊天框**的组件，不是评论区。**不要**据此去改评论选择器。
 
@@ -295,7 +295,7 @@ await presets.mount(agentCtx, id)
 把原因写进 `note`、进日志和设置页的错误行，例如：
 
 ```
-读私信受阻：页面停在「验证码中间页」，需要人工在有头窗口里过验证码（切 --headless=off 让用户手动过）
+读私信受阻：页面停在「验证码中间页」，需要人工在有头窗口里过验证码（维护 → 切有头）
 ```
 
 
@@ -304,7 +304,7 @@ await presets.mount(agentCtx, id)
 
 ---
 
-## 9 个工具
+## 14 个工具
 
 | 工具 | 作用 | 关键点 |
 |---|---|---|
@@ -316,6 +316,11 @@ await presets.mount(agentCtx, id)
 | `douyin_notice_read` | 读互动通知（谁 @/评/赞/关注） | 只读，不标已读；type=31 是回评通知 |
 | `douyin_share` | 把视频以「分享卡片」发给主人 | 页面内 hover 分享面板 → 点好友；送达受风控影响 |
 | `douyin_pick` | 刷推荐流取候选视频 | 返回标题/热度/作者/时长/链接 |
+| `douyin_comment_thread` | 读某条评论下的楼中楼（带每条回复的 id） | 先试签名直连，拿不到点开页面收响应，最后兜底读 DOM |
+| `douyin_video_comments` | 读任意视频（含别人的）评论区，可选连楼中楼 | 顶层评论 + 可选楼中楼；楼中楼委托给 `comment-thread.mjs` |
+| `douyin_work_comments` | 读自己作品下的评论（带 cid 和"是否已回"） | 只读，给「批量回」用 |
+| `douyin_save_login` | 把当前登录态存进 `douyin_cookie.txt`（含 HttpOnly） | 换账号后先存一次 |
+| `douyin_relogin` | 把 `douyin_cookie.txt` 灌回浏览器 | 无头掉登录时用，不用手动再登 |
 | `douyin_analyze` | 视频 → 文案 + 画面联系表 | 详情接口取直链 → **中文转写引擎（Paraformer，纯 CPU，自带标点）** + 抽帧；**收到分享卡片时自动跑**；没人声时返回 `no_speech:true` 并照常给联系表；也支持 `--video <本地文件>`。缺依赖时首次使用自动安装，不需要显卡 |
 
 `douyin_analyze` 两个要知道的细节：
@@ -338,7 +343,7 @@ await presets.mount(agentCtx, id)
 
 ### 评论区自动回（可选，默认关）
 
-打开后挂在私信轮询里一起跑（不新增定时器，避免两个循环抢 9334 浏览器）：
+打开后挂在私信轮询里一起跑（不新增定时器，避免两个循环抢同一个插件浏览器；端口见家目录里的 `runtime.json`）：
 
 ```
 每 commentScanMinutes（默认 10）分钟
@@ -413,7 +418,7 @@ notice_list_v2[].comment.comment = {
 
 ## 本机私有配置（不进仓库）
 
-个人标识和运行态都放在 `$HOME`（默认 `~/.dsh/douyin-duty`，或 `DOUYIN_HOME` 指定的目录），**仓库里一个都不留**（见 `.gitignore`）：
+个人标识和运行态都放在**插件家目录**里，**仓库里一个都不留**（见 `.gitignore`）。家目录怎么定：配置 `home`（宿主注入成 `DOUYIN_HOME`）→ `DOUYIN_HOME` → `DSH_HOME/douyin-duty` → `~/.dsh/douyin-duty`；模板里 `home` **留空就是走这条默认链**：
 
 | 文件 | 内容 | 为什么要隔离 |
 |---|---|---|
@@ -426,7 +431,7 @@ notice_list_v2[].comment.comment = {
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `enabled` | true | 总开关 |
+| `enabled` | **false** | 总开关（默认关，装完要在设置页打开） |
 | `chatUrl` | `https://www.douyin.com/chat` | 私信页 |
 | `peer` | 空 | 要盯的会话昵称（也可放在 `$HOME/peer.json`） |
 | `intervalSeconds` | 30 | 轮询间隔 |
@@ -438,8 +443,13 @@ notice_list_v2[].comment.comment = {
 | `ownerAutoReply` | **false** | 主人消息是否自动回；false=只提醒。默认关：自动替你说话必须显式打开 |
 | `commentUrl` | 默认视频 | `douyin_comment`/`comment_at` 不传 url 时用 |
 | `strangerPolicy` | `notify` | 非主人消息策略 |
+| `commentPerHour` | 6 | 公开评论每小时上限 |
+| `commentPerDay` | 30 | 公开评论每天上限 |
+| `probeHours` | 6 | 评论接口体检间隔（小时，0 = 关） |
 
-改配置**热重载生效，不用重启**（patchReload: live）。改代码才要重启。
+改配置**热重载生效，不用重启**。改代码才要重启。
+
+> ⚠️ **待核实**：这里原来写的是 `patchReload: live`，但插件模板里并没有这个键，宿主默认行为还没查清——先别当成保证。
 
 ---
 
@@ -448,8 +458,8 @@ notice_list_v2[].comment.comment = {
 | 依赖 | 必须？ | 说明 |
 |---|---|---|
 | Node.js（DSH 自带） | ✅ | 所有工具都是 `.mjs`，用 `cfg.nodeBin`（默认 `process.execPath`）执行 |
-| Chrome / Edge / Chromium | ✅ | 9334 无头实例；`lib/chrome.mjs` 自动找，找不到可用 `DOUYIN_BROWSER` 指定 |
-| 抖音登录态 | ✅ | 在 9334 里登一次，`douyin_save_login` 存 cookie，之后 `douyin_relogin` 恢复 |
+| Chrome / Edge / Chromium | ✅ | 插件自己拉一个 Chrome（默认无头、可切有头；端口自动选，记在家目录的 `runtime.json`）；`lib/chrome.mjs` 自动找，找不到可用 `DOUYIN_BROWSER` 指定 |
+| 抖音登录态 | ✅ | 在插件那个浏览器里登一次（维护 → 切有头），`douyin_save_login` 存 cookie，之后 `douyin_relogin` 恢复 |
 | **Python + curl_cffi** | ⚠️ **仅「签名直连」需要（可选）** | 取候选 / 读通知仍是页面内同源请求（`feed-pick.mjs` / `notice-read.mjs`），不依赖 Python。**但读楼中楼（`/comment/list/reply/`）不签名就不返回**，所以 2026-10-28 起加了一条可选快路：`_deps\scripts\douyin-signer\signed_get.py`（vendored `cv-cat/DouYin_Spider` 的 a_bogus）自己算签名直连，需要 `curl_cffi` + `cryptography`。不装也能用：`tools/comment-thread.mjs` 会自动退回「打开页面点开回复」的老路，只是慢十几秒。 |
 
 **平台**（2026-11-18 写实，别当成承诺）：**Windows 优先验证过**。macOS / Linux 没做实机验证 —— 代码里找浏览器、列进程、收紧 cookie 权限都按平台分了支（非 Windows 走 `chmod 600`），主链路（读私信、发私信、评论、刷候选）不依赖 Windows 专有调用；但可选的那两条路（签名直连、本地视频分析）在别的系统上要自己备好 Python 与 ffmpeg，出问题只能按源码排查，不保证开箱可用。
@@ -457,7 +467,7 @@ notice_list_v2[].comment.comment = {
 ## 已知限制 / 风控
 
 - **私信 / 分享卡片会被风控静默丢**：发出方看着成功、接收方收不到（8101 / IM 静默丢弃）。无绕过手段，只能低频 + 短文本（实测 ≤10 字通过率高）。
-- **换账号 / 操作频繁会弹「二次验证」**：无头下视频页还会弹「验证码中间页」（滑块）。解法见上方「🔑 账号切换 / 二次验证」。已给 9334 Chrome 加了反检测（`--disable-blink-features=AutomationControlled` + stealth 脚本），滑块基本不弹，但风控强时仍可能弹。
+- **换账号 / 操作频繁会弹「二次验证」**：无头下视频页还会弹「验证码中间页」（滑块）。解法见上方「🔑 账号切换 / 二次验证」。已给插件自己的 Chrome 加了反检测（`--disable-blink-features=AutomationControlled` + stealth 脚本），滑块基本不弹，但风控强时仍可能弹。
 - **@ 在无头下偶尔要重试**：编辑器焦点会飘，`comment-mention-ui.mjs` 已带重试循环，但做不到 100% 一把过。失败时重跑一次即可。
 - **删评论要靠「回评拿 cid」绕路**：评论列表接口按热门返回，自己的新评论（0 赞）沉底分页拿不到 cid。让主人回一条，从通知的 `parent_id` 拿自己的 cid 再删。
 - 只盯 `peer` 一个会话；多会话列表还没做。
@@ -467,7 +477,7 @@ notice_list_v2[].comment.comment = {
 
 ## 架构（2026-10-24 定稿）
 
-**单浏览器**：所有工具都走 **9334 Chrome**（`chrome.mjs` 通过 CDP 拉起，永远无头），**不依赖 DSH 的 browser 服务**。所以切 DSH 浏览器有头/无头不会再「移除工具」。
+**单浏览器**：所有工具都走**同一个插件自己的 Chrome**（`chrome.mjs` 通过 CDP 拉起；默认无头、可在设置页切有头；端口自动选，记在家目录的 `runtime.json` 里），**不依赖 DSH 的 browser 服务**。所以切 DSH 浏览器有头/无头不会再「移除工具」。
 
 - 读私信（哨兵）→ `chat-read-once.mjs`
 - @ → `comment-mention-ui.mjs`（CDP 真 @）
@@ -480,16 +490,16 @@ notice_list_v2[].comment.comment = {
 - `index.js` —— 插件本体（watcher + 14 个工具）
 - `cordis.patch.yml` —— 挂载声明（bundle patch）
 - `locale/*.json`、`icon.svg` —— 插件列表里的中文名/描述/图标
-- `tools/*.mjs` —— 动作脚本（纯 Node；媒体链路靠 `media-urls.mjs` 截直链 + 技能里的 ffmpeg/whisper）
+- `tools/*.mjs` —— 动作脚本（纯 Node；媒体链路靠 `media-urls.mjs` 截直链 + ffmpeg + **Paraformer** 纯 CPU 转写，转写脚本是 `tools/py/douyin_downloader.py`）
 - `tools/comment-thread.mjs` —— 楼中楼：**先试签名直连**（`_deps\scripts\douyin-signer\signed_get.py`），拿不到再点开页面收响应，最后兜底读 DOM
 - `tools/video-thread.mjs` —— 读任意视频（含别人的）评论区：顶层评论 + 可选楼中楼（楼中楼委托给上一个脚本）
-- `tools/*.py` —— **已弃用**，仅历史参考
+- `tools/*.py`（`forward-pick.py` / `notice-read.py` 这些老脚本）—— **已弃用**，仅历史参考；⚠️ 但 **`tools/py/douyin_downloader.py` 仍在用**，是视频分析（转写/抽帧）的核心，别当垃圾删
 
 ## 维护：清浏览器缓存（2026-10-24 加）
 
-设置页「维护 → 清理浏览器缓存」= POST /api/douyin-watch/cleanup → 	ools/clean-cache.mjs。
+设置页「维护 → 清理浏览器缓存」= POST /api/douyin-watch/cleanup → `tools/clean-cache.mjs`。
 
-- **只删白名单目录**：Default/Cache、Default/Code Cache、*GPUCache、*ShaderCache、Service Worker、component_crx_cache、Safe Browsing、CertificateRevocation、WasmTtsEngine（删了 Chrome 会重建）
+- **只删白名单目录**（共 14 个）：Default/Cache、Default/Code Cache、Default/GPUCache、Default/DawnWebGPUCache、Default/DawnGraphiteCache、Default/GrShaderCache、Default/ShaderCache、Default/Service Worker、GrShaderCache、ShaderCache、component_crx_cache、Safe Browsing、CertificateRevocation、WasmTtsEngine（删了 Chrome 会重建）
 - **绝不碰**：Default/Network/Cookies、Preferences、Local State、Default/Local Storage、Default/IndexedDB —— 脚本清完会**再自检一遍**这些文件是否还在，丢了直接报错
 - 先 Browser.close 再删（不然 EPERM），并等 CDP 端口真的死掉；删不掉的目录会二次重试
 - 顺带清 $HOME/inbox 里 7 天前的聊天图片（表情/封面）
@@ -497,7 +507,7 @@ notice_list_v2[].comment.comment = {
 
 ## 人设库（2026-10-28 改，替代旧的「短人设 + 完整人设」）
 
-一套人设 = 一段正文 + 一个名字，存在 `<home>/personas.json`（默认在家目录下：`<home>/personas.json`），跟着插件走。
+一套人设 = 一段正文 + 一个名字，存在插件家目录的 `personas.json`（家目录规则见「本机私有配置」），跟着插件走。
 
 | 来源 | 能不能改 | 说明 |
 |---|---|---|
@@ -547,6 +557,8 @@ notice_list_v2[].comment.comment = {
 
 **2026-11-13 实测（本机这套环境，别照抄别人的结论）：**
 
+> ⚠️ **待核实**：下面几条是那一次的实测记录，之后接口可能变过，我没复测；要当下结论请先跑 `node tools/comment-probe.mjs`。
+
 - 这个接口的门槛是「query 里有个 `a_bogus`」+ cookie 里有 `ttwid`；**a_bogus 的对错当前不被校验**（随便编一个也能拿到数据），**也不需要登录**（只留 `ttwid` 就能读）。
 - 完全不签名 / 完全没有 cookie → `200` + **空 body**（不是 403、不是 429）。
 - 缺 `aweme_id` → `status_code: 5`；缺 `count` → `status_code: 0` 但 `comments: null`（静默空）；不存在的作品 id → 也是 `comments: null`（和"这作品没评论"长得一样）。
@@ -558,7 +570,7 @@ notice_list_v2[].comment.comment = {
 用来判断「一条评论是不是我发的」，避免自己回自己。
 
 - **存的是什么**：这个抖音账号自己的 `uid` + 昵称 + 学到的时间。**不是主人的身份** —— 主人（能命令我的人）在 `owner.json`，两个文件、两个用途，不合并、不互相兜底。
-- **存在哪**：插件家目录，即 `DOUYIN_HOME`（默认 `~/.dsh/douyin-duty`）下的 `self.json`。
+- **存在哪**：插件家目录（配置 `home`；没配就按默认链落到 `~/.dsh/douyin-duty`）下的 `self.json`。
 - **不存什么**：cookie、session、任何凭据，都不存。
 - **规则**：一个账号一条，同 uid 覆盖更新、不追加；uid 或昵称对不上 → 旧记录作废重学，绝不沿用；历史最多留 3 条，超了删最旧的。
 - **怎么清**：设置页「私信监听 → 这个账号自己是谁」右边 **「清除本机记录」**，点了就删掉 `self.json`（不碰 `owner.json`），下次扫到评论会重新学；也可以直接删文件。
@@ -594,7 +606,7 @@ notice_list_v2[].comment.comment = {
 - **读私信脚本补 sec 兜底**：页面 React 数据取不到对端 sec_uid、但右栏标题跟目标一致时，
   用本机 `peer.json` 里的 sec_uid 回填；不再硬编码任何账号昵称。
 - **包内挂载模板改成占位**：`cordis.patch.yml` 里的 `peer` / `owner` / `home` / `cfgFile` 改成
-  `[PLACEHOLDER_…]` / 留空，公开包不再带任何个人昵称与本机路径。认领主人功能上线后这两个字段本来就不需要手填。
+  `[PLACEHOLDER_…]` / 留空，公开包不再带任何个人昵称与本机路径。**`peer` / `owner` 认领后会自动填；`home` / `cfgFile` / `logFile` 留空 = 用默认目录**（2026-11-28 起模板里连占位符都不留了）。
 
 ### 0.4.9（2026-10-28）
 - **人设改成「人设库」**：内置三套（大肥鱼 / 阿茶 / 听澜）+ 自己导入的，选中哪套就挂进被唤醒的那条会话，

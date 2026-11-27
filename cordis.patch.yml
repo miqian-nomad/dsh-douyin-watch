@@ -21,17 +21,21 @@
     - id: douyin-watch          # ⭐ 必须等于命名空间名
       name: 'dsh-douyin-watch'
       config:
-        # 下面这些是「装到自己机器上要填的值」，公开包里一律留占位。
-        # peer（要盯的会话名）/ owner（能命令它的人）**可以留空**：引导第 4 步「认领当前会话」
-        # 认领成功后会写 owner.json，并同步进 watch-config.json 的 peer / owner
-        # （2026-11-18 修的：以前只写 owner.json、不同步配置，导致认领完发不出私信）。
-        # 前提是你走了一次认领；不想走认领就手填这两个名字。
-        # home / cfgFile 按自己机器的实际目录改。
-        home: '[PLACEHOLDER_DOUYIN_HOME]'
-        cfgFile: '[PLACEHOLDER_DOUYIN_HOME]/watch-config.json'
+        # 下面这些是「装到自己机器上要填的值」。公开包里一律留空 —— 空着就是默认。
+        # ⚠️ 2026-11-28 修：以前这里写的是 [PLACEHOLDER_DOUYIN_HOME]，而代码只判空不认占位符，
+        #    新用户装完家目录就是那个字面量（相对路径），配置/cookie/日志全落进一个怪目录。
+        #    现在占位符一律按「没给」处理，并且模板里不再出现占位符字符串。
+        #
+        # home / cfgFile / logFile：**留空 = 默认目录**，顺序是 DOUYIN_HOME → DSH_HOME/douyin-duty
+        #   → ~/.dsh/douyin-duty；要指定就填绝对路径（例：自己机器上的目录，别照抄别人的）。
+        #   只有「同一台机器上 web / desktop 两个 profile 必须共用同一份配置」时，才需要填同一个绝对路径。
+        # peer（要盯的会话名）/ owner（能命令它的人）也可以留空：走一次「认领当前会话」，
+        #   认领成功后会写 owner.json，并同步进 watch-config.json 的 peer / owner；不想认领就手填这两个名字。
+        home: ''
+        cfgFile: ''
         chatUrl: 'https://www.douyin.com/chat'
         peer: ''
-        logFile: '[PLACEHOLDER_DOUYIN_HOME]/watch-plugin.log'
+        logFile: ''
         owner: ''
         targetCwd: ''
         commentUrl: ''

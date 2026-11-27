@@ -56,6 +56,7 @@
  * ============================================================================
  */
 import { depsPyDir, signerScript } from './lib/deps-root.mjs'
+import { resolveConfiguredPath } from './lib/paths.mjs'
 import { appendFileSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import * as zlib from 'node:zlib'
 import { execFile } from 'node:child_process'
@@ -381,8 +382,13 @@ export function apply(ctx, config) {
   // 配置文件路径：显式 cfgFile > 跟 home 走 > 默认（$HOME/watch-config.json）
   // ⚠️ 必须由 patch 显式给（见 cordis.patch.yml 顶部）：多个 profile 同时加载本插件时，
   //    如果各算各的 home，就会出现「设置写 A、哨兵读 B」——表现是改了没用 / 重启后配置像丢了。
-  const bootHome = String(boot.home || '').trim() || HOME
-  const cfgPath = String(boot.cfgFile || '').trim() || join(bootHome, 'watch-config.json')
+  // 2026-11-28：这三个值都要认「没真给」——空串、纯占位符 [..]、含未替换的 PLACEHOLDER、
+  //   以及字符串 "undefined"/"null"，一律回落默认链（DOUYIN_HOME → DSH_HOME/douyin-duty →
+  //   ~/.dsh/douyin-duty）。以前只判空，公开包里的 [PLACEHOLDER_DOUYIN_HOME] 会被当成真目录，
+  //   新用户装完配置/cookie/日志全落进一个怪路径。
+  const bootHome = resolveConfiguredPath(boot.home, HOME)
+  const cfgPath = resolveConfiguredPath(boot.cfgFile, join(bootHome, 'watch-config.json'))
+  const logPath = resolveConfiguredPath(boot.logFile, join(bootHome, 'watch-plugin.log'))
   // 设置页的持久化配置（文件层，优先级低于 cordis 里的显式配置）
   let fileCfg = {}
   try {
@@ -392,7 +398,9 @@ export function apply(ctx, config) {
       if (parsed && typeof parsed === 'object') fileCfg = parsed
     }
   } catch { /* 读不到就按默认 */ }
-  const cfg = { ...DEFAULTS, ...fileCfg, ...boot, cfgFile: cfgPath }
+  // ⚠️ home / cfgFile / logFile 三个键必须在展开 boot 之后再覆盖：
+  //   否则 boot 里的占位符会盖掉上面算好的真路径（脚本和日志都会跑偏）。
+  const cfg = { ...DEFAULTS, ...fileCfg, ...boot, home: bootHome, cfgFile: cfgPath, logFile: logPath }
   // 2026-11-17 兼容：老配置里没有 autoScrollWhen 这个键、却真填过时段 ——
   //   按「按时间段」算，别让升级之后他设的时段悄悄失效。
   //   只看 fileCfg（用户真写进文件的），不看默认值，免得把默认时段当成人配的。
@@ -466,6 +474,9 @@ export function apply(ctx, config) {
     })
   })
 
+  // 2026-11-28：启动就把「实际用的是哪三个路径」写进日志 ——
+  //   新用户装歪了（占位符/相对路径）时，第一眼看这里就能发现，不用猜。
+  log(`家目录=${cfg.home} ｜ 配置=${cfg.cfgFile} ｜ 日志=${cfg.logFile}`)
   log(`已挂载（peer=${cfg.peer} 间隔=${cfg.intervalSeconds}s onlyNewest=${cfg.onlyNewest} targetCwd=${cfg.targetCwd || '(不限)'} ownerAutoReply=${cfg.ownerAutoReply}）`)
 
   // ⚠️ 这四个必须**在 enabled 提前 return 之前**声明（2026-10-24 踩过）：
@@ -519,7 +530,7 @@ export function apply(ctx, config) {
             return j && j.mode === 'headed' ? 'headed' : 'headless'
           } catch { return 'headless' }
         }
-        const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; o.claim = readOwnerClaim(); o.browserMode = browserModeNow(); o.dataDir = String(cfg.home || HOME); o.commentScanMinutes = Math.min(120, Math.max(5, Number(cfg.commentScanMinutes) || 10));
+        const view = async () => { const o = {}; for (const k of TOGGLE_KEYS) o[k] = cfg[k]; o.peer = cfg.peer; o.claim = readOwnerClaim(); o.browserMode = browserModeNow(); o.dataDir = String(cfg.home || HOME); o.cfgFilePath = String(cfg.cfgFile || ''); o.logFilePath = String(cfg.logFile || ''); o.commentScanMinutes = Math.min(120, Math.max(5, Number(cfg.commentScanMinutes) || 10));
         // 2026-11-18：设置页要显示「今天已经刷了几条」，不然改「每天最多」时不知道还剩多少额度
         try { const ps = readPickerState(); o.autoScrollTodayCount = Number(ps.count) || 0; o.autoScrollTodayDate = String(ps.date || '') } catch { o.autoScrollTodayCount = 0; o.autoScrollTodayDate = '' }
         // 2026-11-07：状态卡要显示"回复发到哪个对话"的真名字（不是"下拉里选的那个"）
@@ -3443,3 +3454,4 @@ export function apply(ctx, config) {
     else log(`已盯上 ${watched.size} 个 agent`)
   }, 30_000)
 }
+

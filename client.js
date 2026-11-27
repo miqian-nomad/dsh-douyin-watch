@@ -990,7 +990,9 @@ window.__ModuleLoader__.load({
           cell('最后一次收到私信', s.lastWake || '还没有'),
           cell('回复发到哪个对话', s.sessionLabel || (sessionId ? '（已选，名字暂时没取到）' : '最近在用的那个')),
         ),
-        bad ? h('div', { style: { fontSize: 12, color: T.danger, marginTop: 8 } }, '出错原因：' + s.lastError) : null,
+        // 2026-11-28：把「实际用的是哪个目录」摆出来 —— 别人装歪了（占位符/相对路径）一眼能看见
+        h('div', { style: { fontSize: 11.5, color: C.text3, marginTop: 6, lineHeight: '18px' } },
+          '家目录：' + (s.dataDir || '—') + (s.logFilePath ? ' · 日志：' + s.logFilePath : '')),        bad ? h('div', { style: { fontSize: 12, color: T.danger, marginTop: 8 } }, '出错原因：' + s.lastError) : null,
       );
     }
 
@@ -2061,3 +2063,4 @@ window.__ModuleLoader__.load({
     };
   },
 });
+
